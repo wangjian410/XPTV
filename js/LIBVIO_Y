@@ -161,136 +161,112 @@ async function getPlayinfo(ext) {
 
     const { data } = await $fetch.get(url, { headers })
     let realPlayUrl = ''
-
-    // 方式1: 匹配 player_aaaa 配置对象中的 url
-    let match = data.match(/player_[a-z]+\s*=\s*\{[^}]*"url"\s*:\s*"([^"]+)"/i)
-    if (match) {
-      realPlayUrl = match[1]
+    
+    // 提取所有可能的视频 URL
+    const allUrls = []
+    
+    // 1. 查找所有 .mp4 链接
+    const mp4Matches = data.match(/https?:\/\/[^\s"'<>()]+\.mp4(?:[^\s"'<>()]*)?/gi)
+    if (mp4Matches) {
+      allUrls.push(...mp4Matches)
     }
-
-    // 方式2: 匹配 MacCmsPlayer 配置
-    if (!realPlayUrl) {
-      match = data.match(/MacPlayer\s*\.\s*Parse\s*\([^)]*url\s*:\s*["']([^"']+)["']/i)
-      if (match) {
-        realPlayUrl = match[1]
-      }
+    
+    // 2. 查找所有 .m3u8 链接
+    const m3u8Matches = data.match(/https?:\/\/[^\s"'<>()]+\.m3u8(?:[^\s"'<>()]*)?/gi)
+    if (m3u8Matches) {
+      allUrls.push(...m3u8Matches)
     }
-
-    // 方式3: 匹配 var now 或类似变量中的 URL
-    if (!realPlayUrl) {
-      match = data.match(/var\s+\w+\s*=\s*["']([^"']*(?:\.m3u8|\.mp4)[^"']*)["']/i)
-      if (match) {
-        realPlayUrl = match[1]
-      }
+    
+    // 3. 查找 player 配置中的 url
+    let match = data.match(/player[_\w]*\s*=\s*\{[^}]*["']url["']\s*:\s*["']([^"']+)["']/i)
+    if (match && match[1]) {
+      allUrls.push(match[1])
     }
-
-    // 方式4: 直接匹配完整的 .mp4 URL（针对你的实际请求）
-    if (!realPlayUrl) {
-      match = data.match(/(https?:\/\/[^\s"'<>]+\.mp4(?:\?[^\s"'<>]*)?)/i)
-      if (match) {
-        realPlayUrl = match[1]
-      }
+    
+    // 4. 查找 MacPlayer 配置
+    match = data.match(/MacPlayer[^{]*\{[^}]*url\s*:\s*["']([^"']+)["']/i)
+    if (match && match[1]) {
+      allUrls.push(match[1])
     }
-
-    // 方式5: 直接匹配 .m3u8 链接
-    if (!realPlayUrl) {
-      match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]*)?)/i)
-      if (match) {
-        realPlayUrl = match[1]
-      }
+    
+    // 5. 查找 JSON 格式的 url 字段
+    match = data.match(/["']url["']\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
+    if (match && match[1]) {
+      allUrls.push(match[1])
     }
-
-    // 方式6: 匹配 JSON 格式的 url 字段
-    if (!realPlayUrl) {
-      match = data.match(/["']url["']\s*:\s*["']([^"']+)["']/i)
-      if (match) {
-        realPlayUrl = match[1]
-      }
-    }
-
-    // 方式7: 检查 iframe 嵌套播放器
-    if (!realPlayUrl) {
-      const $ = cheerio.load(data)
-      const iframeSrc = $('iframe').attr('src')
-      
-      if (iframeSrc) {
-        // 如果 iframe 直接包含视频链接
-        if (iframeSrc.includes('.m3u8') || iframeSrc.includes('.mp4')) {
-          realPlayUrl = iframeSrc
-        } 
-        // 如果是第三方播放器，尝试请求它
-        else if (iframeSrc.startsWith('http')) {
-          try {
-            const iframeUrl = iframeSrc.startsWith('//') ? 'https:' + iframeSrc : iframeSrc
-            const iframeHeaders = {
-              'User-Agent': headers['User-Agent'],
-              'Referer': url,
-            }
-            const iframeData = await $fetch.get(iframeUrl, { 
-              headers: iframeHeaders,
-              timeout: 10000 
-            })
-            
-            // 在 iframe 内容中查找视频链接
-            const iframeMatch = iframeData.data.match(/(https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?)/)
-            if (iframeMatch) {
-              realPlayUrl = iframeMatch[1]
-            }
-          } catch (e) {
-            // iframe 请求失败，继续其他方法
-          }
+    
+    // 6. 检查 iframe
+    const $ = cheerio.load(data)
+    const iframeSrc = $('iframe').attr('src')
+    
+    if (iframeSrc && iframeSrc.startsWith('http')) {
+      try {
+        const iframeUrl = iframeSrc.startsWith('//') ? 'https:' + iframeSrc : iframeSrc
+        const iframeHeaders = {
+          'User-Agent': headers['User-Agent'],
+          'Referer': url,
+          'Accept': '*/*',
         }
+        
+        const iframeData = await $fetch.get(iframeUrl, { 
+          headers: iframeHeaders,
+          timeout: 15000 
+        })
+        
+        // 在 iframe 中查找视频链接
+        const iframeMp4 = iframeData.data.match(/https?:\/\/[^\s"'<>()]+\.mp4(?:[^\s"'<>()]*)?/gi)
+        if (iframeMp4) {
+          allUrls.push(...iframeMp4)
+        }
+        
+        const iframeM3u8 = iframeData.data.match(/https?:\/\/[^\s"'<>()]+\.m3u8(?:[^\s"'<>()]*)?/gi)
+        if (iframeM3u8) {
+          allUrls.push(...iframeM3u8)
+        }
+        
+        // 查找 iframe 中的 player 配置
+        const iframeMatch = iframeData.data.match(/["']url["']\s*:\s*["']([^"']+)["']/i)
+        if (iframeMatch && iframeMatch[1]) {
+          allUrls.push(iframeMatch[1])
+        }
+      } catch (e) {
+        // iframe 请求失败
       }
     }
-
-    // 方式8: 查找 script 标签中的加密或编码 URL
-    if (!realPlayUrl) {
-      const $ = cheerio.load(data)
-      $('script').each((i, el) => {
-        const scriptContent = $(el).html()
-        if (scriptContent) {
-          // 匹配可能的视频 URL
-          const urlMatch = scriptContent.match(/(https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?)/)
-          if (urlMatch) {
-            realPlayUrl = urlMatch[1]
-            return false // 跳出循环
-          }
-        }
-      })
+    
+    // 清理和过滤 URL
+    const cleanUrls = allUrls
+      .map(u => u.replace(/\\/g, '').trim())
+      .filter(u => u.startsWith('http'))
+      .filter(u => !u.includes('player.js') && !u.includes('.css') && !u.includes('.jpg') && !u.includes('.png'))
+      .filter((u, i, arr) => arr.indexOf(u) === i) // 去重
+    
+    // 优先选择 vvbing.me 域名的链接（根据你的实际请求）
+    realPlayUrl = cleanUrls.find(u => u.includes('vvbing.me')) || 
+                  cleanUrls.find(u => u.endsWith('.mp4')) || 
+                  cleanUrls.find(u => u.endsWith('.m3u8')) ||
+                  cleanUrls[0] || ''
+    
+    // 处理相对路径
+    if (realPlayUrl && !realPlayUrl.startsWith('http')) {
+      if (realPlayUrl.startsWith('//')) {
+        realPlayUrl = 'https:' + realPlayUrl
+      } else if (realPlayUrl.startsWith('/')) {
+        const siteUrl = new URL(currentSite)
+        realPlayUrl = siteUrl.origin + realPlayUrl
+      }
+    }
+    
+    // URL 解码
+    if (realPlayUrl && realPlayUrl.includes('%')) {
+      try {
+        realPlayUrl = decodeURIComponent(realPlayUrl)
+      } catch (e) {}
     }
 
     if (realPlayUrl) {
-      // 清理和标准化 URL
-      realPlayUrl = realPlayUrl.replace(/\\/g, '').trim()
-
-      // 处理相对路径
-      if (!realPlayUrl.startsWith('http')) {
-        if (realPlayUrl.startsWith('//')) {
-          realPlayUrl = 'https:' + realPlayUrl
-        } else if (realPlayUrl.startsWith('/')) {
-          const siteUrl = new URL(currentSite)
-          realPlayUrl = siteUrl.origin + realPlayUrl
-        }
-      }
-
-      // 解码可能的 URL 编码
-      try {
-        if (realPlayUrl.includes('%')) {
-          realPlayUrl = decodeURIComponent(realPlayUrl)
-        }
-      } catch (e) {
-        // 解码失败，使用原始 URL
-      }
-
-      // 返回播放信息，添加必要的 headers
       return jsonify({ 
-        urls: [realPlayUrl],
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-          'Referer': currentSite,
-          'Accept': '*/*',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        }
+        urls: [realPlayUrl]
       })
     }
 
