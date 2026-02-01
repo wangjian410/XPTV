@@ -127,67 +127,97 @@ async function getPlayinfo(ext) {
   ext = argsify(ext)
   let playUrl = ext.url.startsWith('http') ? ext.url : appConfig.site + ext.url
 
-  const headers = { 'User-Agent': UA, 'Referer': appConfig.site + '/', 'Origin': appConfig.site }
+  // headers严格模拟浏览器（基于你的截图UA和Referer）
+  const playHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    'Referer': playUrl,  // 关键，防盗链
+    'Origin': appConfig.site,
+    'Accept': '*/*',
+    'Accept-Encoding': 'identity;q=1, *;q=0',  // 匹配截图
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Connection': 'keep-alive',
+    'Sec-Fetch-Dest': 'video',
+    'Sec-Fetch-Mode': 'no-cors',
+    'Sec-Fetch-Site': 'cross-site'
+  }
 
-  const { data: html } = await $fetch.get(playUrl, { headers }).catch(() => ({ data: '' }))
-  if (!html) return jsonify({ urls: [] })
+  let html = ''
+  try {
+    const resp = await $fetch.get(playUrl, { headers: playHeaders })
+    html = resp.data || ''
+  } catch (e) {
+    return jsonify({ urls: [], note: '播放页请求失败: ' + e.message })
+  }
 
-  let urls = []
+  if (!html) return jsonify({ urls: [], note: '播放页内容为空' })
 
-  // 后备提取逻辑
-  const patterns = [
-    /"url":"(https?:[^"]+\.(m3u8|mp4)[^"]*)"/,
-    /player_aaaa\s*=\s*({.+?})/s,
-    /var player_data\s*=\s*({.+?})/s
+  let realUrl = ''
+  let note = ''
+
+  // 增强提取patterns，按2026 libvio常见顺序
+  const extractPatterns = [
+    // 1. 直接抓明文视频URL（基于你的截图风格，优先MP4）
+    { re: /"url"\s*:\s*["']?(https?:\/\/[^"']+\.(mp4|m3u8|flv|ts)[^"']*)["']?/ig, group: 1 },
+    // 2. 各种player config变体（常见fork后改名）
+    { re: /(?:player_aaaa|player_data|playerConfig|config|videoInfo|playData|mediaConfig)\s*[=:]\s*({.+?})(?:<\/script>|['"]?\s*[,;}\s])/s, needParse: true },
+    // 3. 内嵌iframe或src（部分模板直接用）
+    { re: /<iframe[^>]+src=["']?(https?:\/\/[^"']+\.(mp4|m3u8)?[^"']*)["']?/i, group: 1 },
+    // 4. var player = {} 老风格
+    { re: /var\s+(?:player|config|data)\s*=\s*({.+?});/s, needParse: true },
+    // 5. 宽松抓任何http mp4链接（防遗漏）
+    { re: /(https?:\/\/[^"'\s]+\.(mp4|m3u8|flv|ts)[^"'\s]*)/ig, group: 1 }
   ]
 
-  for (const pat of patterns) {
-    const match = html.match(pat)
-    if (match) {
-      try {
-        if (match[1].startsWith('http')) {
-          urls = [match[1].replace(/\\/g, '')]
+  for (const pat of extractPatterns) {
+    const matches = html.matchAll(pat.re)
+    for (const match of matches) {
+      if (pat.group) {
+        realUrl = match[pat.group].replace(/\\/g, '').trim()
+        if (realUrl.startsWith('http') && (realUrl.includes('.mp4') || realUrl.includes('.m3u8'))) {
+          note = '直接提取明文URL'
           break
         }
-        const cfg = JSON.parse(match[1])
-        if (cfg.url.startsWith('http')) {
-          urls = [cfg.url]
-          break
-        } else if (cfg.url) {
-          const apiPrefixes = [
-            `${appConfig.site}/api/?url=`,
-            `https://jx.libvio.app/?url=`,
-            `${appConfig.site}/static/player/api.php?url=`
-          ]
-          for (const prefix of apiPrefixes) {
-            const apiUrl = prefix + encodeURIComponent(cfg.url)
-            const { data: apiRes } = await $fetch.get(apiUrl, { headers }).catch(() => ({ data: '' }))
-            if (apiRes) {
-              try {
-                const j = JSON.parse(apiRes)
-                if (j.url && j.url.startsWith('http')) {
-                  urls = [j.url]
-                  break
-                }
-              } catch {
-                const vidMatch = apiRes.match(/vid\s*=\s*['"](http[^'"]+)['"]/)
-                if (vidMatch) urls = [vidMatch[1]]
-              }
+      }
+
+      if (pat.needParse) {
+        try {
+          let jsonStr = match[1].trim().replace(/'/g, '"')  // 容错单引号
+          // 简单修复不标准JSON
+          jsonStr = jsonStr.replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3')
+          const cfg = JSON.parse(jsonStr)
+          const possibleUrls = [cfg.url, cfg.playUrl, cfg.video, cfg.src, cfg.mediaUrl, cfg.link]
+          for (const u of possibleUrls) {
+            if (u && u.startsWith('http')) {
+              realUrl = u.replace(/\\/g, '').trim()
+              note = '从config提取'
+              break
             }
-            if (urls.length > 0) break
           }
+          if (realUrl) break
+        } catch (e) {
+          note += 'JSON解析失败: ' + e.message + '; '
         }
-      } catch {}
-      if (urls.length > 0) break
+      }
     }
+    if (realUrl) break
   }
 
-  // 兜底
-  if (urls.length === 0) {
-    urls = [`${appConfig.site}/api/?url=${encodeURIComponent(playUrl)}`]
+  // 如果是相对路径或短链，补全
+  if (realUrl && !realUrl.startsWith('http')) {
+    realUrl = appConfig.site + (realUrl.startsWith('/') ? realUrl : '/' + realUrl)
   }
 
-  return jsonify({ urls, parse: urls[0].includes('.m3u8') || urls[0].includes('.mp4') ? 0 : 1 })
+  // 兜底（但基于截图，不太需要）
+  if (!realUrl) {
+    realUrl = `${appConfig.site}/api/?url=${encodeURIComponent(playUrl)}`
+    note = '未匹配，使用兜底API'
+  }
+
+  return jsonify({
+    urls: [realUrl],
+    parse: realUrl.includes('.m3u8') || realUrl.includes('.mp4') ? 0 : 1,
+    note: note
+  })
 }
 
 async function search(ext) {
