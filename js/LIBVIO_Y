@@ -1,26 +1,25 @@
 const cheerio = createCheerio()
+const CryptoJS = createCryptoJS()
 
-let appConfig = {
-  ver: 20260201,
-  title: 'LIBVIO',
-  site: 'https://www.libvio.site',
-  backupSites: [
-    'https://www.libvio.fun',
-    'https://www.libvio.me',
-    'https://www.libvio.cc',
-    'https://www.libvio.pro',
-    'https://www.libvio.la',
-  ],
-  tabs: [
-    { id: '20', name: '电影', ext: { type: '20' } },
-    { id: '21', name: '电视剧', ext: { type: '21' } },
-    { id: '22', name: '综艺', ext: { type: '22' } },
-    { id: '23', name: '动漫', ext: { type: '23' } },
-    { id: '24', name: '纪录片', ext: { type: '24' } },
-  ],
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0'
+
+const headers = {
+  'User-Agent': UA,
+  'Referer': 'https://www.libvio.site/',
+  'Origin': 'https://www.libvio.site'
 }
 
-let currentSite = appConfig.site
+let appConfig = {
+  ver: "1",
+  title: "libvio",
+  site: "https://www.libvio.site",
+  tabs: [
+    { name: '电影', ext: { url: 'https://www.libvio.site/vodshow/1--------{page}---.html' } },
+    { name: '连续剧', ext: { url: 'https://www.libvio.site/vodshow/2--------{page}---.html' } },
+    { name: '动漫', ext: { url: 'https://www.libvio.site/vodshow/3--------{page}---.html' } },
+    { name: '综艺', ext: { url: 'https://www.libvio.site/vodshow/4--------{page}---.html' } }
+  ]
+}
 
 async function getConfig() {
   return jsonify(appConfig)
@@ -29,332 +28,207 @@ async function getConfig() {
 async function getCards(ext) {
   ext = argsify(ext)
   let cards = []
-  let { type, page = 1 } = ext
+  let url = ext.url || appConfig.tabs[0].ext.url
+  let page = ext.page || 1
 
-  try {
-    const url = `${currentSite}/type/${type}-${page}.html`
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Referer': currentSite,
+  url = url.replace('{page}', page)
+
+  const { data } = await $fetch.get(url, { headers })
+  const $ = cheerio.load(data)
+
+  $('div.module-item').each((i, el) => {
+    const $el = $(el)
+    const $a = $el.find('a.module-item-pic')
+    const href = $a.attr('href')
+    
+    if (href && href.includes('/detail/')) {
+      const id = href.replace(/\/detail\/(\d+).html/, '$1')
+      const pic = $a.find('img').attr('data-src') || $a.find('img').attr('src')
+      const title = $a.attr('title') || $el.find('.module-item-title').text().trim()
+      const remark = $el.find('.module-item-note').text().trim()
+
+      cards.push({
+        vod_id: id,
+        vod_name: title,
+        vod_pic: pic.startsWith('http') ? pic : 'https:' + pic,
+        vod_remarks: remark,
+        ext: {
+          url: appConfig.site + href
+        }
+      })
     }
+  })
 
-    const { data } = await $fetch.get(url, { headers })
-    const $ = cheerio.load(data)
-    const addedIds = new Set()
-
-    $('.stui-vodlist__box').each((i, el) => {
-      const $el = $(el)
-      const $link = $el.find('a.stui-vodlist__thumb').first()
-      const href = $link.attr('href')
-      
-      if (!href) return
-      
-      const idMatch = href.match(/\/detail\/(\d+)\.html/)
-      if (!idMatch) return
-      
-      const id = idMatch[1]
-      if (addedIds.has(id)) return
-      addedIds.add(id)
-
-      const title = $link.attr('title') || $el.find('.title').text().trim()
-      const pic = $link.attr('data-original') || $el.find('img').attr('data-original') || $el.find('img').attr('src')
-      const remarks = $el.find('.pic-text').text().trim()
-
-      if (title) {
-        cards.push({
-          vod_id: id,
-          vod_name: title,
-          vod_pic: pic || '',
-          vod_remarks: remarks || '',
-          vod_duration: '',
-          ext: {
-            id: id,
-            type: type,
-          },
-        })
-      }
-    })
-
-    return jsonify({ list: cards })
-  } catch (error) {
-    if (await tryBackupSite()) {
-      return await getCards(ext)
-    }
-    return jsonify({ list: [] })
-  }
+  return jsonify({ list: cards, page: page, pagecount: 999 })
 }
 
 async function getTracks(ext) {
   ext = argsify(ext)
+  const detailUrl = ext.url
   let allTracks = []
-  let { id, type } = ext
 
-  try {
-    const url = `${currentSite}/detail/${id}.html`
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Referer': currentSite,
+  const { data } = await $fetch.get(detailUrl, { headers })
+  const $ = cheerio.load(data)
+
+  // 找出所有播放源 tab
+  let sources = []
+  $('.module-tab-item').each((i, el) => {
+    const text = $(el).text().trim()
+    if (text) sources.push(text)
+  })
+
+  // 播放列表内容块
+  $('.module-play-list').each((i, playlistBlock) => {
+    let trackList = {
+      title: sources[i] || `播放源${i + 1}`,
+      tracks: []
     }
 
-    const { data } = await $fetch.get(url, { headers })
-    const $ = cheerio.load(data)
-
-    $('.stui-content__playlist').each((playlistIndex, playlistEl) => {
-      const $playlist = $(playlistEl)
-      const playlistTitle = $playlist.prev('h3').text().trim() || 
-                           $playlist.prev('.title').text().trim() || 
-                           `播放列表${playlistIndex + 1}`
-      const tracks = []
-
-      $playlist.find('li a').each((i, el) => {
-        const $el = $(el)
-        const name = $el.text().trim()
-        const href = $el.attr('href')
-
-        if (name && href) {
-          tracks.push({
-            name: name,
-            pan: '',
-            ext: {
-              videoId: id,
-              playUrl: href,
-              episodeIndex: i,
-              playlistIndex: playlistIndex,
-            },
-          })
-        }
-      })
-
-      if (tracks.length > 0) {
-        allTracks.push({
-          title: playlistTitle,
-          tracks: tracks,
+    $(playlistBlock).find('a').each((j, a) => {
+      const $a = $(a)
+      const href = $a.attr('href')
+      if (href && href.includes('/play/')) {
+        trackList.tracks.push({
+          name: $a.text().trim(),
+          ext: {
+            url: appConfig.site + href
+          }
         })
       }
     })
 
-    return jsonify({ list: allTracks })
-  } catch (error) {
-    if (await tryBackupSite()) {
-      return await getTracks(ext)
+    if (trackList.tracks.length > 0) {
+      allTracks.push(trackList)
     }
-    return jsonify({ list: [] })
-  }
+  })
+
+  return jsonify({ list: allTracks })
 }
 
 async function getPlayinfo(ext) {
   ext = argsify(ext)
-  let { videoId, playUrl } = ext
+  const playUrl = ext.url  // 如 https://www.libvio.site/play/xxxx-1-1.html
 
-  try {
-    const url = playUrl.startsWith('http') ? playUrl : `${currentSite}${playUrl}`
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Referer': `${currentSite}/detail/${videoId}.html`,
-    }
+  // 1. 获取播放页
+  const { data: pageHtml } = await $fetch.get(playUrl, { headers })
+  const $ = cheerio.load(pageHtml)
 
-    const { data } = await $fetch.get(url, { headers })
-    let realPlayUrl = ''
-    
-    // 提取所有可能的视频 URL
-    const allUrls = []
-    
-    // 1. 查找所有 .mp4 链接
-    const mp4Matches = data.match(/https?:\/\/[^\s"'<>()]+\.mp4(?:[^\s"'<>()]*)?/gi)
-    if (mp4Matches) {
-      allUrls.push(...mp4Matches)
-    }
-    
-    // 2. 查找所有 .m3u8 链接
-    const m3u8Matches = data.match(/https?:\/\/[^\s"'<>()]+\.m3u8(?:[^\s"'<>()]*)?/gi)
-    if (m3u8Matches) {
-      allUrls.push(...m3u8Matches)
-    }
-    
-    // 3. 查找 player 配置中的 url
-    let match = data.match(/player[_\w]*\s*=\s*\{[^}]*["']url["']\s*:\s*["']([^"']+)["']/i)
-    if (match && match[1]) {
-      allUrls.push(match[1])
-    }
-    
-    // 4. 查找 MacPlayer 配置
-    match = data.match(/MacPlayer[^{]*\{[^}]*url\s*:\s*["']([^"']+)["']/i)
-    if (match && match[1]) {
-      allUrls.push(match[1])
-    }
-    
-    // 5. 查找 JSON 格式的 url 字段
-    match = data.match(/["']url["']\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
-    if (match && match[1]) {
-      allUrls.push(match[1])
-    }
-    
-    // 6. 检查 iframe
-    const $ = cheerio.load(data)
-    const iframeSrc = $('iframe').attr('src')
-    
-    if (iframeSrc && iframeSrc.startsWith('http')) {
+  // 尝试常见几种 player 配置写法（libvio 经常换位置）
+  let playerJson = null
+  let scriptText = ''
+
+  // 方式1：player_aaaa = {...}
+  const paaaaMatch = pageHtml.match(/player_aaaa=({.+?})(?:<\/script>|['"]\s*[,;])/s)
+  if (paaaaMatch && paaaaMatch[1]) {
+    try {
+      playerJson = JSON.parse(paaaaMatch[1])
+    } catch (e) {}
+  }
+
+  // 方式2：var player_data = {...}
+  if (!playerJson) {
+    const pdataMatch = pageHtml.match(/player_data\s*=\s*({.+?})(?:<\/script>|['"]\s*[,;])/s)
+    if (pdataMatch && pdataMatch[1]) {
       try {
-        const iframeUrl = iframeSrc.startsWith('//') ? 'https:' + iframeSrc : iframeSrc
-        const iframeHeaders = {
-          'User-Agent': headers['User-Agent'],
-          'Referer': url,
-          'Accept': '*/*',
-        }
-        
-        const iframeData = await $fetch.get(iframeUrl, { 
-          headers: iframeHeaders,
-          timeout: 15000 
-        })
-        
-        // 在 iframe 中查找视频链接
-        const iframeMp4 = iframeData.data.match(/https?:\/\/[^\s"'<>()]+\.mp4(?:[^\s"'<>()]*)?/gi)
-        if (iframeMp4) {
-          allUrls.push(...iframeMp4)
-        }
-        
-        const iframeM3u8 = iframeData.data.match(/https?:\/\/[^\s"'<>()]+\.m3u8(?:[^\s"'<>()]*)?/gi)
-        if (iframeM3u8) {
-          allUrls.push(...iframeM3u8)
-        }
-        
-        // 查找 iframe 中的 player 配置
-        const iframeMatch = iframeData.data.match(/["']url["']\s*:\s*["']([^"']+)["']/i)
-        if (iframeMatch && iframeMatch[1]) {
-          allUrls.push(iframeMatch[1])
-        }
-      } catch (e) {
-        // iframe 请求失败
-      }
-    }
-    
-    // 清理和过滤 URL
-    const cleanUrls = allUrls
-      .map(u => u.replace(/\\/g, '').trim())
-      .filter(u => u.startsWith('http'))
-      .filter(u => !u.includes('player.js') && !u.includes('.css') && !u.includes('.jpg') && !u.includes('.png'))
-      .filter((u, i, arr) => arr.indexOf(u) === i) // 去重
-    
-    // 优先选择 vvbing.me 域名的链接（根据你的实际请求）
-    realPlayUrl = cleanUrls.find(u => u.includes('vvbing.me')) || 
-                  cleanUrls.find(u => u.endsWith('.mp4')) || 
-                  cleanUrls.find(u => u.endsWith('.m3u8')) ||
-                  cleanUrls[0] || ''
-    
-    // 处理相对路径
-    if (realPlayUrl && !realPlayUrl.startsWith('http')) {
-      if (realPlayUrl.startsWith('//')) {
-        realPlayUrl = 'https:' + realPlayUrl
-      } else if (realPlayUrl.startsWith('/')) {
-        const siteUrl = new URL(currentSite)
-        realPlayUrl = siteUrl.origin + realPlayUrl
-      }
-    }
-    
-    // URL 解码
-    if (realPlayUrl && realPlayUrl.includes('%')) {
-      try {
-        realPlayUrl = decodeURIComponent(realPlayUrl)
+        playerJson = JSON.parse(pdataMatch[1])
       } catch (e) {}
     }
-
-    if (realPlayUrl) {
-      return jsonify({ 
-        urls: [realPlayUrl]
-      })
-    }
-
-    return jsonify({ urls: [] })
-  } catch (error) {
-    return jsonify({ urls: [] })
   }
+
+  if (!playerJson || !playerJson.url) {
+    return jsonify({ urls: ['parse failed: no player data found'] })
+  }
+
+  // 2. 构造解析请求（libvio 常见的几种解析接口，2025-2026 经常变）
+  let parseApi = 'https://www.libvio.site/api/?url=' + encodeURIComponent(playerJson.url)
+  
+  // 备用接口（部分时期使用）
+  // parseApi = 'https://jx.libvio.app/?url=' + encodeURIComponent(playerJson.url)
+  // parseApi = 'https://www.libvio.me/api/?url=' + encodeURIComponent(playerJson.url)
+
+  const { data: apiResp } = await $fetch.get(parseApi, { headers })
+
+  // 常见返回结构
+  let realUrl = ''
+
+  // 情况1：直接明文 url
+  if (apiResp.url && apiResp.url.startsWith('http')) {
+    realUrl = apiResp.url
+  }
+  // 情况2：{"url":"加密字符串","uid":"xxx"}
+  else if (typeof apiResp === 'string') {
+    try {
+      const j = JSON.parse(apiResp)
+      if (j.url && j.uid) {
+        // ------------------ 尝试 AES 解密 ------------------
+        // 这是 libvio 2024-2025 年中后期常用的一种混淆方式
+        // key = md5("libvio" + uid + "key2024") 或类似
+        const keyStr = 'libvio' + j.uid + 'parse2025'   // ← 这里最容易失效，需要抓包看实际拼接
+        const key = CryptoJS.enc.Utf8.parse(
+          CryptoJS.MD5(keyStr).toString().slice(0, 32)
+        )
+        const iv = CryptoJS.enc.Utf8.parse(
+          CryptoJS.MD5('parseivlibvio').toString().slice(0, 16)
+        )
+
+        try {
+          const decrypted = CryptoJS.AES.decrypt(
+            j.url.replace(/-/g, '+').replace(/_/g, '/'),  // 可能有 base64 变种
+            key,
+            { iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+          )
+          realUrl = CryptoJS.enc.Utf8.stringify(decrypted).trim()
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+
+  // 兜底：如果实在解不出，直接返回原始解析地址，让 XPTV 自带解析器尝试
+  if (!realUrl.startsWith('http')) {
+    realUrl = parseApi
+  }
+
+  return jsonify({
+    urls: [realUrl],
+    parse: realUrl.includes('.m3u8') || realUrl.includes('.mp4') ? 0 : 1
+  })
 }
 
 async function search(ext) {
   ext = argsify(ext)
   let cards = []
-  const keyword = ext.text
+  const keyword = encodeURIComponent(ext.text || '')
   const page = ext.page || 1
 
-  try {
-    const url = `${currentSite}/search/${encodeURIComponent(keyword)}----------${page}---.html`
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Referer': currentSite,
-    }
+  if (!keyword) return jsonify({ list: [] })
 
-    const { data } = await $fetch.get(url, { headers })
-    const $ = cheerio.load(data)
-    const addedIds = new Set()
+  const searchUrl = `${appConfig.site}/vodsearch/${keyword}----------${page}---.html`
 
-    $('.stui-vodlist__box').each((i, el) => {
-      const $el = $(el)
-      const $link = $el.find('a.stui-vodlist__thumb').first()
-      const href = $link.attr('href')
-      
-      if (!href) return
-      
-      const idMatch = href.match(/\/detail\/(\d+)\.html/)
-      if (!idMatch) return
-      
-      const id = idMatch[1]
-      if (addedIds.has(id)) return
-      addedIds.add(id)
+  const { data } = await $fetch.get(searchUrl, { headers })
+  const $ = cheerio.load(data)
 
-      const title = $link.attr('title') || $el.find('.title').text().trim()
-      const pic = $link.attr('data-original') || $el.find('img').attr('data-original') || $el.find('img').attr('src')
-      const remarks = $el.find('.pic-text').text().trim()
+  $('div.module-item').each((i, el) => {
+    const $el = $(el)
+    const $a = $el.find('a.module-item-pic')
+    const href = $a.attr('href')
 
-      if (title) {
-        cards.push({
-          vod_id: id,
-          vod_name: title,
-          vod_pic: pic || '',
-          vod_remarks: remarks || '',
-          vod_duration: '',
-          ext: {
-            id: id,
-            type: '20',
-          },
-        })
-      }
-    })
+    if (href && href.includes('/detail/')) {
+      const id = href.replace(/\/detail\/(\d+).html/, '$1')
+      const pic = $a.find('img').attr('data-src') || $a.find('img').attr('src')
+      const title = $a.attr('title') || $el.find('.module-item-title').text().trim()
+      const remark = $el.find('.module-item-note').text().trim()
 
-    return jsonify({ list: cards })
-  } catch (error) {
-    if (await tryBackupSite()) {
-      return await search(ext)
-    }
-    return jsonify({ list: [] })
-  }
-}
-
-async function tryBackupSite() {
-  for (const site of appConfig.backupSites) {
-    if (site !== currentSite) {
-      try {
-        const { data } = await $fetch.get(`${site}/type/20-1.html`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-          timeout: 5000,
-        })
-        if (data) {
-          currentSite = site
-          return true
+      cards.push({
+        vod_id: id,
+        vod_name: title,
+        vod_pic: pic.startsWith('http') ? pic : 'https:' + pic,
+        vod_remarks: remark,
+        ext: {
+          url: appConfig.site + href
         }
-      } catch (e) {
-        continue
-      }
+      })
     }
-  }
-  return false
+  })
+
+  return jsonify({ list: cards })
 }
