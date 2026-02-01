@@ -4,7 +4,6 @@ const cheerio = createCheerio()
 let appConfig = {
     ver: 20251202,
     title: 'LIBVIO',
-    // 使用多个备用域名
     site: 'https://www.libvio.fun',
     backupSites: [
         'https://www.libvio.cc',
@@ -18,7 +17,6 @@ let appConfig = {
             name: '电影',
             ext: {
                 type: '20',
-                area: 'all',
             },
         },
         {
@@ -26,7 +24,6 @@ let appConfig = {
             name: '电视剧',
             ext: {
                 type: '21',
-                area: 'all',
             },
         },
         {
@@ -34,7 +31,6 @@ let appConfig = {
             name: '综艺',
             ext: {
                 type: '22',
-                area: 'all',
             },
         },
         {
@@ -42,7 +38,6 @@ let appConfig = {
             name: '动漫',
             ext: {
                 type: '23',
-                area: 'all',
             },
         },
         {
@@ -50,13 +45,11 @@ let appConfig = {
             name: '纪录片',
             ext: {
                 type: '24',
-                area: 'all',
             },
         },
     ],
 }
 
-// 当前可用的站点
 let currentSite = appConfig.site
 
 async function getConfig() {
@@ -66,10 +59,9 @@ async function getConfig() {
 async function getCards(ext) {
     ext = argsify(ext)
     let cards = []
-    let { type, area, page = 1 } = ext
+    let { type, page = 1 } = ext
 
     try {
-        // 直接访问列表页面，绕过首页
         const url = `${currentSite}/type/${type}-${page}.html`
         
         const headers = {
@@ -82,24 +74,32 @@ async function getCards(ext) {
         const { data } = await $fetch.get(url, { headers })
         const $ = cheerio.load(data)
 
-        // 解析视频列表
-        $('.stui-vodlist__box, .stui-vodlist li, .module-item').each((i, el) => {
+        // 使用 Set 去重
+        const addedIds = new Set()
+
+        // 只选择 .stui-vodlist__box，避免重复
+        $('.stui-vodlist__box').each((i, el) => {
             const $el = $(el)
-            const $link = $el.find('a.stui-vodlist__thumb, a[href*="/detail/"], a[href*="/show/"]').first()
-            const $title = $el.find('.title, .stui-vodlist__title, h4, .module-item-title').first()
-            const $pic = $el.find('img, .lazyload').first()
-            const $remarks = $el.find('.pic-text, .stui-vodlist__text, .module-item-text').first()
-
+            const $link = $el.find('a.stui-vodlist__thumb').first()
             const href = $link.attr('href')
-            const title = $title.text().trim() || $link.attr('title')
-            const pic = $pic.attr('data-original') || $pic.attr('data-src') || $pic.attr('src')
-            const remarks = $remarks.text().trim()
+            
+            if (!href) return
 
-            if (href && title) {
-                // 提取视频ID
-                const idMatch = href.match(/\/detail\/(\d+)\.html/) || href.match(/\/show\/(\d+)\.html/) || href.match(/\/(\d+)\.html/)
-                const id = idMatch ? idMatch[1] : href
+            // 提取视频ID
+            const idMatch = href.match(/\/detail\/(\d+)\.html/)
+            if (!idMatch) return
+            
+            const id = idMatch[1]
+            
+            // 去重
+            if (addedIds.has(id)) return
+            addedIds.add(id)
 
+            const title = $link.attr('title') || $el.find('.title').text().trim()
+            const pic = $link.attr('data-original') || $el.find('img').attr('data-original') || $el.find('img').attr('src')
+            const remarks = $el.find('.pic-text').text().trim()
+
+            if (title) {
                 cards.push({
                     vod_id: id,
                     vod_name: title,
@@ -119,7 +119,6 @@ async function getCards(ext) {
         })
     } catch (error) {
         $print('获取列表失败:', error)
-        // 尝试备用域名
         if (await tryBackupSite()) {
             return await getCards(ext)
         }
@@ -129,11 +128,10 @@ async function getCards(ext) {
 
 async function getTracks(ext) {
     ext = argsify(ext)
-    let tracks = []
+    let allTracks = []
     let { id, type } = ext
 
     try {
-        // 直接访问详情页
         const url = `${currentSite}/detail/${id}.html`
         
         const headers = {
@@ -146,32 +144,47 @@ async function getTracks(ext) {
         const { data } = await $fetch.get(url, { headers })
         const $ = cheerio.load(data)
 
-        // 解析播放列表
-        $('.stui-content__playlist li a, .play-list a, .anthology-list-play li a').each((i, el) => {
-            const $el = $(el)
-            const name = $el.text().trim()
-            const href = $el.attr('href')
+        // 解析多个播放源
+        $('.stui-content__playlist').each((playlistIndex, playlistEl) => {
+            const $playlist = $(playlistEl)
+            
+            // 获取播放源标题（如 BD5播放、HD5播放等）
+            const playlistTitle = $playlist.prev('h3').text().trim() || 
+                                 $playlist.prev('.title').text().trim() || 
+                                 `播放列表${playlistIndex + 1}`
 
-            if (name && href) {
-                tracks.push({
-                    name: name,
-                    pan: '',
-                    ext: {
-                        videoId: id,
-                        playUrl: href,
-                        episodeIndex: i,
-                    },
+            const tracks = []
+            
+            $playlist.find('li a').each((i, el) => {
+                const $el = $(el)
+                const name = $el.text().trim()
+                const href = $el.attr('href')
+
+                if (name && href) {
+                    tracks.push({
+                        name: name,
+                        pan: '',
+                        ext: {
+                            videoId: id,
+                            playUrl: href,
+                            episodeIndex: i,
+                            playlistIndex: playlistIndex,
+                        },
+                    })
+                }
+            })
+
+            // 只添加有内容的播放列表
+            if (tracks.length > 0) {
+                allTracks.push({
+                    title: playlistTitle,
+                    tracks: tracks,
                 })
             }
         })
 
         return jsonify({
-            list: [
-                {
-                    title: '播放列表',
-                    tracks,
-                },
-            ],
+            list: allTracks,
         })
     } catch (error) {
         $print('获取剧集失败:', error)
@@ -187,7 +200,6 @@ async function getPlayinfo(ext) {
     let { videoId, playUrl, episodeIndex } = ext
 
     try {
-        // 访问播放页面
         const url = playUrl.startsWith('http') ? playUrl : `${currentSite}${playUrl}`
         
         const headers = {
@@ -200,22 +212,50 @@ async function getPlayinfo(ext) {
         const { data } = await $fetch.get(url, { headers })
         const $ = cheerio.load(data)
 
-        // 从页面中提取播放链接
         let realPlayUrl = ''
 
-        // 方法1: 从 script 标签中提取
+        // 方法1: 从 script 标签中提取播放配置
         $('script').each((i, el) => {
             const scriptContent = $(el).html()
-            if (scriptContent) {
-                // 查找常见的播放链接变量
-                const urlMatch = scriptContent.match(/player_.*?=.*?['"]url['"]:\s*['"]([^'"]+)['"]/) ||
-                                scriptContent.match(/var\s+url\s*=\s*['"]([^'"]+)['"]/) ||
-                                scriptContent.match(/src:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/) ||
-                                scriptContent.match(/https?:\/\/[^'"]+\.m3u8[^'"]*/)
+            if (scriptContent && scriptContent.includes('player_')) {
+                // 匹配 player_aaaa 配置
+                const playerMatch = scriptContent.match(/var\s+player_\w+\s*=\s*(\{[\s\S]*?\});/)
+                if (playerMatch) {
+                    try {
+                        // 清理并解析 JSON
+                        let jsonStr = playerMatch[1]
+                        // 移除注释
+                        jsonStr = jsonStr.replace(/\/\*[\s\S]*?\*\//g, '')
+                        jsonStr = jsonStr.replace(/\/\/.*/g, '')
+                        
+                        const playerConfig = JSON.parse(jsonStr)
+                        realPlayUrl = playerConfig.url
+                        
+                        if (realPlayUrl) {
+                            return false // 跳出循环
+                        }
+                    } catch (e) {
+                        $print('解析播放配置失败:', e)
+                    }
+                }
 
-                if (urlMatch) {
-                    realPlayUrl = urlMatch[1] || urlMatch[0]
-                    return false // 跳出循环
+                // 备用方案：直接匹配 URL
+                if (!realPlayUrl) {
+                    const urlMatch = scriptContent.match(/"url"\s*:\s*"([^"]+)"/) ||
+                                   scriptContent.match(/'url'\s*:\s*'([^']+)'/)
+                    if (urlMatch) {
+                        realPlayUrl = urlMatch[1]
+                        return false
+                    }
+                }
+
+                // 匹配 m3u8 链接
+                if (!realPlayUrl) {
+                    const m3u8Match = scriptContent.match(/(https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/)
+                    if (m3u8Match) {
+                        realPlayUrl = m3u8Match[1]
+                        return false
+                    }
                 }
             }
         })
@@ -223,8 +263,7 @@ async function getPlayinfo(ext) {
         // 方法2: 从 iframe 中提取
         if (!realPlayUrl) {
             const iframeSrc = $('iframe').attr('src')
-            if (iframeSrc) {
-                // 如果是第三方播放器，可能需要进一步解析
+            if (iframeSrc && iframeSrc.includes('.m3u8')) {
                 realPlayUrl = iframeSrc
             }
         }
@@ -235,6 +274,9 @@ async function getPlayinfo(ext) {
         }
 
         if (realPlayUrl) {
+            // 处理 URL 编码
+            realPlayUrl = realPlayUrl.replace(/\\/g, '')
+            
             // 处理相对路径
             if (!realPlayUrl.startsWith('http')) {
                 realPlayUrl = currentSite + realPlayUrl
@@ -243,6 +285,7 @@ async function getPlayinfo(ext) {
             return jsonify({ urls: [realPlayUrl] })
         }
 
+        $print('未找到播放链接')
         return jsonify({ urls: [] })
     } catch (error) {
         $print('获取播放链接失败:', error)
@@ -257,7 +300,6 @@ async function search(ext) {
     const page = ext.page || 1
 
     try {
-        // 直接访问搜索页面
         const url = `${currentSite}/search/${encodeURIComponent(keyword)}----------${page}---.html`
         
         const headers = {
@@ -270,23 +312,28 @@ async function search(ext) {
         const { data } = await $fetch.get(url, { headers })
         const $ = cheerio.load(data)
 
-        // 解析搜索结果
-        $('.stui-vodlist__box, .stui-vodlist li, .module-search-item').each((i, el) => {
+        const addedIds = new Set()
+
+        $('.stui-vodlist__box').each((i, el) => {
             const $el = $(el)
-            const $link = $el.find('a.stui-vodlist__thumb, a[href*="/detail/"]').first()
-            const $title = $el.find('.title, .stui-vodlist__title, h4').first()
-            const $pic = $el.find('img, .lazyload').first()
-            const $remarks = $el.find('.pic-text, .stui-vodlist__text').first()
-
+            const $link = $el.find('a.stui-vodlist__thumb').first()
             const href = $link.attr('href')
-            const title = $title.text().trim() || $link.attr('title')
-            const pic = $pic.attr('data-original') || $pic.attr('data-src') || $pic.attr('src')
-            const remarks = $remarks.text().trim()
+            
+            if (!href) return
 
-            if (href && title) {
-                const idMatch = href.match(/\/detail\/(\d+)\.html/) || href.match(/\/(\d+)\.html/)
-                const id = idMatch ? idMatch[1] : href
+            const idMatch = href.match(/\/detail\/(\d+)\.html/)
+            if (!idMatch) return
+            
+            const id = idMatch[1]
+            
+            if (addedIds.has(id)) return
+            addedIds.add(id)
 
+            const title = $link.attr('title') || $el.find('.title').text().trim()
+            const pic = $link.attr('data-original') || $el.find('img').attr('data-original') || $el.find('img').attr('src')
+            const remarks = $el.find('.pic-text').text().trim()
+
+            if (title) {
                 cards.push({
                     vod_id: id,
                     vod_name: title,
@@ -313,7 +360,6 @@ async function search(ext) {
     }
 }
 
-// 尝试备用域名
 async function tryBackupSite() {
     for (const site of appConfig.backupSites) {
         if (site !== currentSite) {
