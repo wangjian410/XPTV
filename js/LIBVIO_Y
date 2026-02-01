@@ -74,10 +74,8 @@ async function getCards(ext) {
         const { data } = await $fetch.get(url, { headers })
         const $ = cheerio.load(data)
 
-        // 使用 Set 去重
         const addedIds = new Set()
 
-        // 只选择 .stui-vodlist__box，避免重复
         $('.stui-vodlist__box').each((i, el) => {
             const $el = $(el)
             const $link = $el.find('a.stui-vodlist__thumb').first()
@@ -85,13 +83,11 @@ async function getCards(ext) {
             
             if (!href) return
 
-            // 提取视频ID
             const idMatch = href.match(/\/detail\/(\d+)\.html/)
             if (!idMatch) return
             
             const id = idMatch[1]
             
-            // 去重
             if (addedIds.has(id)) return
             addedIds.add(id)
 
@@ -144,11 +140,9 @@ async function getTracks(ext) {
         const { data } = await $fetch.get(url, { headers })
         const $ = cheerio.load(data)
 
-        // 解析多个播放源
         $('.stui-content__playlist').each((playlistIndex, playlistEl) => {
             const $playlist = $(playlistEl)
             
-            // 获取播放源标题（如 BD5播放、HD5播放等）
             const playlistTitle = $playlist.prev('h3').text().trim() || 
                                  $playlist.prev('.title').text().trim() || 
                                  `播放列表${playlistIndex + 1}`
@@ -174,7 +168,6 @@ async function getTracks(ext) {
                 }
             })
 
-            // 只添加有内容的播放列表
             if (tracks.length > 0) {
                 allTracks.push({
                     title: playlistTitle,
@@ -200,6 +193,9 @@ async function getPlayinfo(ext) {
     let { videoId, playUrl, episodeIndex } = ext
 
     try {
+        $print('开始获取播放链接...')
+        $print('播放页面URL:', playUrl)
+        
         const url = playUrl.startsWith('http') ? playUrl : `${currentSite}${playUrl}`
         
         const headers = {
@@ -210,82 +206,101 @@ async function getPlayinfo(ext) {
         }
 
         const { data } = await $fetch.get(url, { headers })
-        const $ = cheerio.load(data)
-
+        
         let realPlayUrl = ''
 
-        // 方法1: 从 script 标签中提取播放配置
-        $('script').each((i, el) => {
-            const scriptContent = $(el).html()
-            if (scriptContent && scriptContent.includes('player_')) {
-                // 匹配 player_aaaa 配置
-                const playerMatch = scriptContent.match(/var\s+player_\w+\s*=\s*(\{[\s\S]*?\});/)
-                if (playerMatch) {
-                    try {
-                        // 清理并解析 JSON
-                        let jsonStr = playerMatch[1]
-                        // 移除注释
-                        jsonStr = jsonStr.replace(/\/\*[\s\S]*?\*\//g, '')
-                        jsonStr = jsonStr.replace(/\/\/.*/g, '')
-                        
-                        const playerConfig = JSON.parse(jsonStr)
-                        realPlayUrl = playerConfig.url
-                        
-                        if (realPlayUrl) {
-                            return false // 跳出循环
-                        }
-                    } catch (e) {
-                        $print('解析播放配置失败:', e)
-                    }
-                }
+        // 方法1: 使用正则提取 player_aaaa 配置
+        const playerConfigMatch = data.match(/var\s+player_\w+\s*=\s*(\{[^}]*"url"\s*:\s*"([^"]+)"[^}]*\})/)
+        if (playerConfigMatch && playerConfigMatch[2]) {
+            realPlayUrl = playerConfigMatch[2]
+            $print('方法1提取到URL:', realPlayUrl)
+        }
 
-                // 备用方案：直接匹配 URL
-                if (!realPlayUrl) {
-                    const urlMatch = scriptContent.match(/"url"\s*:\s*"([^"]+)"/) ||
-                                   scriptContent.match(/'url'\s*:\s*'([^']+)'/)
-                    if (urlMatch) {
-                        realPlayUrl = urlMatch[1]
-                        return false
-                    }
-                }
-
-                // 匹配 m3u8 链接
-                if (!realPlayUrl) {
-                    const m3u8Match = scriptContent.match(/(https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/)
-                    if (m3u8Match) {
-                        realPlayUrl = m3u8Match[1]
-                        return false
-                    }
-                }
-            }
-        })
-
-        // 方法2: 从 iframe 中提取
+        // 方法2: 提取完整的 player 配置并解析
         if (!realPlayUrl) {
-            const iframeSrc = $('iframe').attr('src')
-            if (iframeSrc && iframeSrc.includes('.m3u8')) {
-                realPlayUrl = iframeSrc
+            const fullPlayerMatch = data.match(/var\s+player_\w+\s*=\s*(\{[\s\S]*?\});/)
+            if (fullPlayerMatch) {
+                try {
+                    let configStr = fullPlayerMatch[1]
+                    // 清理注释
+                    configStr = configStr.replace(/\/\*[\s\S]*?\*\//g, '')
+                    configStr = configStr.replace(/\/\/.*/g, '')
+                    
+                    // 尝试提取 url 字段
+                    const urlInConfig = configStr.match(/"url"\s*:\s*"([^"]+)"/)
+                    if (urlInConfig) {
+                        realPlayUrl = urlInConfig[1]
+                        $print('方法2提取到URL:', realPlayUrl)
+                    }
+                } catch (e) {
+                    $print('解析配置失败:', e)
+                }
             }
         }
 
-        // 方法3: 从 video 标签中提取
+        // 方法3: 直接匹配 m3u8 链接
         if (!realPlayUrl) {
-            realPlayUrl = $('video source').attr('src') || $('video').attr('src')
+            const m3u8Match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
+            if (m3u8Match) {
+                realPlayUrl = m3u8Match[1]
+                $print('方法3提取到URL:', realPlayUrl)
+            }
+        }
+
+        // 方法4: 匹配任何视频链接
+        if (!realPlayUrl) {
+            const videoMatch = data.match(/(https?:\/\/[^\s"'<>]+\.(mp4|m3u8|flv)[^\s"'<>]*)/)
+            if (videoMatch) {
+                realPlayUrl = videoMatch[1]
+                $print('方法4提取到URL:', realPlayUrl)
+            }
+        }
+
+        // 方法5: 使用 cheerio 解析
+        if (!realPlayUrl) {
+            const $ = cheerio.load(data)
+            
+            // 检查 iframe
+            const iframeSrc = $('iframe').attr('src')
+            if (iframeSrc) {
+                $print('找到iframe:', iframeSrc)
+                // 如果是第三方播放器，可能需要再次请求
+                if (iframeSrc.includes('.m3u8') || iframeSrc.includes('.mp4')) {
+                    realPlayUrl = iframeSrc
+                    $print('方法5-iframe提取到URL:', realPlayUrl)
+                }
+            }
+
+            // 检查 video 标签
+            if (!realPlayUrl) {
+                const videoSrc = $('video source').attr('src') || $('video').attr('src')
+                if (videoSrc) {
+                    realPlayUrl = videoSrc
+                    $print('方法5-video提取到URL:', realPlayUrl)
+                }
+            }
         }
 
         if (realPlayUrl) {
-            // 处理 URL 编码
+            // 清理 URL
             realPlayUrl = realPlayUrl.replace(/\\/g, '')
+            realPlayUrl = realPlayUrl.trim()
             
             // 处理相对路径
             if (!realPlayUrl.startsWith('http')) {
-                realPlayUrl = currentSite + realPlayUrl
+                if (realPlayUrl.startsWith('//')) {
+                    realPlayUrl = 'https:' + realPlayUrl
+                } else if (realPlayUrl.startsWith('/')) {
+                    realPlayUrl = currentSite + realPlayUrl
+                }
             }
 
+            $print('最终播放URL:', realPlayUrl)
             return jsonify({ urls: [realPlayUrl] })
         }
 
-        $print('未找到播放链接')
+        $print('未找到播放链接，输出页面前500字符:')
+        $print(data.substring(0, 500))
         return jsonify({ urls: [] })
     } catch (error) {
         $print('获取播放链接失败:', error)
