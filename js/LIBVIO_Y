@@ -1,23 +1,19 @@
 const cheerio = createCheerio()
-const CryptoJS = createCryptoJS()
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0'
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 
-const headers = {
-  'User-Agent': UA,
-  'Referer': 'https://www.libvio.site/',
-  'Origin': 'https://www.libvio.site'
-}
-
-let appConfig = {
-  ver: "1",
-  title: "libvio",
-  site: "https://www.libvio.site",
+const appConfig = {
+  ver: 1,
+  title: 'LIBVIO',
+  site: 'https://www.libvio.site',  // 如果换域名，这里改
   tabs: [
-    { name: '电影', ext: { url: 'https://www.libvio.site/vodshow/1--------{page}---.html' } },
-    { name: '连续剧', ext: { url: 'https://www.libvio.site/vodshow/2--------{page}---.html' } },
-    { name: '动漫', ext: { url: 'https://www.libvio.site/vodshow/3--------{page}---.html' } },
-    { name: '综艺', ext: { url: 'https://www.libvio.site/vodshow/4--------{page}---.html' } }
+    { name: '首页', ext: { url: '/', hasMore: false } },
+    { name: '电影', ext: { url: '/vodshow/1--------{page}---.html' } },  // 2026主流格式，如果是/type/20-1.html，换成它
+    { name: '剧集', ext: { url: '/vodshow/2--------{page}---.html' } },
+    { name: '动漫', ext: { url: '/vodshow/3--------{page}---.html' } },
+    { name: '综艺', ext: { url: '/vodshow/4--------{page}---.html' } },
+    { name: '日韩剧', ext: { url: '/vodshow/13--------{page}---.html' } },
+    { name: '欧美剧', ext: { url: '/vodshow/14--------{page}---.html' } }
   ]
 }
 
@@ -28,207 +24,184 @@ async function getConfig() {
 async function getCards(ext) {
   ext = argsify(ext)
   let cards = []
-  let url = ext.url || appConfig.tabs[0].ext.url
+  let url = ext.url
   let page = ext.page || 1
+  let hasMore = ext.hasMore !== undefined ? ext.hasMore : true
 
-  url = url.replace('{page}', page)
+  if (!hasMore && page > 1) return jsonify({ list: cards })
 
-  const { data } = await $fetch.get(url, { headers })
-  const $ = cheerio.load(data)
+  // 分页兼容
+  url = url.replace('{page}', page).replace('-1.html', `-${page}.html`)
+  url = url.startsWith('http') ? url : appConfig.site + url
 
-  $('div.module-item').each((i, el) => {
-    const $el = $(el)
-    const $a = $el.find('a.module-item-pic')
-    const href = $a.attr('href')
-    
-    if (href && href.includes('/detail/')) {
-      const id = href.replace(/\/detail\/(\d+).html/, '$1')
-      const pic = $a.find('img').attr('data-src') || $a.find('img').attr('src')
-      const title = $a.attr('title') || $el.find('.module-item-title').text().trim()
-      const remark = $el.find('.module-item-note').text().trim()
+  const headers = { 'User-Agent': UA, 'Referer': appConfig.site + '/', 'Origin': appConfig.site }
 
-      cards.push({
-        vod_id: id,
-        vod_name: title,
-        vod_pic: pic.startsWith('http') ? pic : 'https:' + pic,
-        vod_remarks: remark,
-        ext: {
-          url: appConfig.site + href
+  const { data: html } = await $fetch.get(url, { headers }).catch(() => ({ data: '' }))
+  if (!html) return jsonify({ list: [], note: '请求失败' })
+
+  const $ = cheerio.load(html)
+
+  // 多选择器策略，按2026年概率排序
+  const strategies = [
+    { card: 'div.module-item', pic: 'img[data-src],img[src]', title: '.module-item-title', remark: '.module-item-note', link: 'a.module-item-pic' },
+    { card: 'a.stui-vodlist__thumb', pic: '[data-original]', title: '[title]', remark: '.pic-text', link: '' },
+    { card: 'div.hl-list-item,li.vodlist-item', pic: 'img[data-src],img[src]', title: '.title,.vodlist-title', remark: '.note,.pic-text', link: 'a' }
+  ]
+
+  let addedIds = new Set()
+  let found = false
+
+  for (const sel of strategies) {
+    $(sel.card).each((i, el) => {
+      const $el = $(el)
+      let $link = sel.link ? $el.find(sel.link) : $el
+      const href = $link.attr('href')
+
+      if (href && /detail|voddetail/.test(href) && !addedIds.has(href)) {
+        addedIds.add(href)
+        const pic = $el.find(sel.pic).attr('data-src') || $el.find(sel.pic).attr('src') || $el.find(sel.pic).attr('data-original') || ''
+        const name = $el.find(sel.title).text().trim() || $link.attr('title') || ''
+        const remarks = $el.find(sel.remark).text().trim()
+
+        if (name) {
+          found = true
+          cards.push({
+            vod_id: href,
+            vod_name: name,
+            vod_pic: pic.startsWith('//') ? 'https:' + pic : pic,
+            vod_remarks: remarks,
+            ext: { url: appConfig.site + href }
+          })
         }
-      })
-    }
-  })
+      }
+    })
+    if (found) break
+  }
 
-  return jsonify({ list: cards, page: page, pagecount: 999 })
+  return jsonify({ list: cards, note: found ? '' : '无匹配元素' })
 }
 
 async function getTracks(ext) {
   ext = argsify(ext)
-  const detailUrl = ext.url
+  const detailUrl = ext.url.startsWith('http') ? ext.url : appConfig.site + ext.url
   let allTracks = []
 
-  const { data } = await $fetch.get(detailUrl, { headers })
-  const $ = cheerio.load(data)
+  const headers = { 'User-Agent': UA, 'Referer': appConfig.site + '/', 'Origin': appConfig.site }
 
-  // 找出所有播放源 tab
-  let sources = []
-  $('.module-tab-item').each((i, el) => {
-    const text = $(el).text().trim()
-    if (text) sources.push(text)
-  })
+  const { data: html } = await $fetch.get(detailUrl, { headers }).catch(() => ({ data: '' }))
+  if (!html) return jsonify({ list: [] })
 
-  // 播放列表内容块
-  $('.module-play-list').each((i, playlistBlock) => {
-    let trackList = {
-      title: sources[i] || `播放源${i + 1}`,
-      tracks: []
-    }
+  const $ = cheerio.load(html)
 
-    $(playlistBlock).find('a').each((j, a) => {
-      const $a = $(a)
-      const href = $a.attr('href')
-      if (href && href.includes('/play/')) {
-        trackList.tracks.push({
-          name: $a.text().trim(),
-          ext: {
-            url: appConfig.site + href
-          }
+  // 多播放列表选择器
+  const playlistSels = ['.module-play-list', '.stui-content__playlist', '.playlist,.anthology-list-play']
+  let playlists = []
+  playlistSels.forEach(sel => playlists = playlists.concat($(sel).toArray()))
+
+  let index = 0
+  for (const playlist of playlists) {
+    const $playlist = $(playlist)
+    let title = $playlist.prevAll('h3,h4,.module-tab-item').first().text().trim() || `线路${++index}`
+
+    if (title.includes('磁力') || title.includes('下载')) continue
+
+    let tracks = []
+    $playlist.find('li a').each((i, el) => {
+      const name = $(el).text().trim()
+      const href = $(el).attr('href')
+      if (name && href) {
+        tracks.push({
+          name,
+          ext: { url: appConfig.site + href }
         })
       }
     })
 
-    if (trackList.tracks.length > 0) {
-      allTracks.push(trackList)
-    }
-  })
+    if (tracks.length > 0) allTracks.push({ title, tracks })
+  }
 
   return jsonify({ list: allTracks })
 }
 
 async function getPlayinfo(ext) {
   ext = argsify(ext)
-  const playUrl = ext.url  // 如 https://www.libvio.site/play/xxxx-1-1.html
+  let playUrl = ext.url.startsWith('http') ? ext.url : appConfig.site + ext.url
 
-  // 1. 获取播放页
-  const { data: pageHtml } = await $fetch.get(playUrl, { headers })
-  const $ = cheerio.load(pageHtml)
+  const headers = { 'User-Agent': UA, 'Referer': appConfig.site + '/', 'Origin': appConfig.site }
 
-  // 尝试常见几种 player 配置写法（libvio 经常换位置）
-  let playerJson = null
-  let scriptText = ''
+  const { data: html } = await $fetch.get(playUrl, { headers }).catch(() => ({ data: '' }))
+  if (!html) return jsonify({ urls: [] })
 
-  // 方式1：player_aaaa = {...}
-  const paaaaMatch = pageHtml.match(/player_aaaa=({.+?})(?:<\/script>|['"]\s*[,;])/s)
-  if (paaaaMatch && paaaaMatch[1]) {
-    try {
-      playerJson = JSON.parse(paaaaMatch[1])
-    } catch (e) {}
-  }
+  let urls = []
 
-  // 方式2：var player_data = {...}
-  if (!playerJson) {
-    const pdataMatch = pageHtml.match(/player_data\s*=\s*({.+?})(?:<\/script>|['"]\s*[,;])/s)
-    if (pdataMatch && pdataMatch[1]) {
+  // 后备提取逻辑
+  const patterns = [
+    /"url":"(https?:[^"]+\.(m3u8|mp4)[^"]*)"/,
+    /player_aaaa\s*=\s*({.+?})/s,
+    /var player_data\s*=\s*({.+?})/s
+  ]
+
+  for (const pat of patterns) {
+    const match = html.match(pat)
+    if (match) {
       try {
-        playerJson = JSON.parse(pdataMatch[1])
-      } catch (e) {}
+        if (match[1].startsWith('http')) {
+          urls = [match[1].replace(/\\/g, '')]
+          break
+        }
+        const cfg = JSON.parse(match[1])
+        if (cfg.url.startsWith('http')) {
+          urls = [cfg.url]
+          break
+        } else if (cfg.url) {
+          const apiPrefixes = [
+            `${appConfig.site}/api/?url=`,
+            `https://jx.libvio.app/?url=`,
+            `${appConfig.site}/static/player/api.php?url=`
+          ]
+          for (const prefix of apiPrefixes) {
+            const apiUrl = prefix + encodeURIComponent(cfg.url)
+            const { data: apiRes } = await $fetch.get(apiUrl, { headers }).catch(() => ({ data: '' }))
+            if (apiRes) {
+              try {
+                const j = JSON.parse(apiRes)
+                if (j.url && j.url.startsWith('http')) {
+                  urls = [j.url]
+                  break
+                }
+              } catch {
+                const vidMatch = apiRes.match(/vid\s*=\s*['"](http[^'"]+)['"]/)
+                if (vidMatch) urls = [vidMatch[1]]
+              }
+            }
+            if (urls.length > 0) break
+          }
+        }
+      } catch {}
+      if (urls.length > 0) break
     }
   }
 
-  if (!playerJson || !playerJson.url) {
-    return jsonify({ urls: ['parse failed: no player data found'] })
+  // 兜底
+  if (urls.length === 0) {
+    urls = [`${appConfig.site}/api/?url=${encodeURIComponent(playUrl)}`]
   }
 
-  // 2. 构造解析请求（libvio 常见的几种解析接口，2025-2026 经常变）
-  let parseApi = 'https://www.libvio.site/api/?url=' + encodeURIComponent(playerJson.url)
-  
-  // 备用接口（部分时期使用）
-  // parseApi = 'https://jx.libvio.app/?url=' + encodeURIComponent(playerJson.url)
-  // parseApi = 'https://www.libvio.me/api/?url=' + encodeURIComponent(playerJson.url)
-
-  const { data: apiResp } = await $fetch.get(parseApi, { headers })
-
-  // 常见返回结构
-  let realUrl = ''
-
-  // 情况1：直接明文 url
-  if (apiResp.url && apiResp.url.startsWith('http')) {
-    realUrl = apiResp.url
-  }
-  // 情况2：{"url":"加密字符串","uid":"xxx"}
-  else if (typeof apiResp === 'string') {
-    try {
-      const j = JSON.parse(apiResp)
-      if (j.url && j.uid) {
-        // ------------------ 尝试 AES 解密 ------------------
-        // 这是 libvio 2024-2025 年中后期常用的一种混淆方式
-        // key = md5("libvio" + uid + "key2024") 或类似
-        const keyStr = 'libvio' + j.uid + 'parse2025'   // ← 这里最容易失效，需要抓包看实际拼接
-        const key = CryptoJS.enc.Utf8.parse(
-          CryptoJS.MD5(keyStr).toString().slice(0, 32)
-        )
-        const iv = CryptoJS.enc.Utf8.parse(
-          CryptoJS.MD5('parseivlibvio').toString().slice(0, 16)
-        )
-
-        try {
-          const decrypted = CryptoJS.AES.decrypt(
-            j.url.replace(/-/g, '+').replace(/_/g, '/'),  // 可能有 base64 变种
-            key,
-            { iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
-          )
-          realUrl = CryptoJS.enc.Utf8.stringify(decrypted).trim()
-        } catch (e) {}
-      }
-    } catch (e) {}
-  }
-
-  // 兜底：如果实在解不出，直接返回原始解析地址，让 XPTV 自带解析器尝试
-  if (!realUrl.startsWith('http')) {
-    realUrl = parseApi
-  }
-
-  return jsonify({
-    urls: [realUrl],
-    parse: realUrl.includes('.m3u8') || realUrl.includes('.mp4') ? 0 : 1
-  })
+  return jsonify({ urls, parse: urls[0].includes('.m3u8') || urls[0].includes('.mp4') ? 0 : 1 })
 }
 
 async function search(ext) {
   ext = argsify(ext)
-  let cards = []
-  const keyword = encodeURIComponent(ext.text || '')
+  const keyword = encodeURIComponent(ext.text)
   const page = ext.page || 1
+  if (page > 1) return jsonify({ list: [] })
 
-  if (!keyword) return jsonify({ list: [] })
+  const searchUrl = appConfig.site + `/vodsearch/${keyword}----------${page}---.html`
 
-  const searchUrl = `${appConfig.site}/vodsearch/${keyword}----------${page}---.html`
+  ext.url = searchUrl
+  return await getCards(ext)  // 复用getCards
+}
 
-  const { data } = await $fetch.get(searchUrl, { headers })
-  const $ = cheerio.load(data)
-
-  $('div.module-item').each((i, el) => {
-    const $el = $(el)
-    const $a = $el.find('a.module-item-pic')
-    const href = $a.attr('href')
-
-    if (href && href.includes('/detail/')) {
-      const id = href.replace(/\/detail\/(\d+).html/, '$1')
-      const pic = $a.find('img').attr('data-src') || $a.find('img').attr('src')
-      const title = $a.attr('title') || $el.find('.module-item-title').text().trim()
-      const remark = $el.find('.module-item-note').text().trim()
-
-      cards.push({
-        vod_id: id,
-        vod_name: title,
-        vod_pic: pic.startsWith('http') ? pic : 'https:' + pic,
-        vod_remarks: remark,
-        ext: {
-          url: appConfig.site + href
-        }
-      })
-    }
-  })
-
-  return jsonify({ list: cards })
+function dictToURI(params) {
+  return Object.entries(params).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
 }
