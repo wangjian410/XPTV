@@ -1,0 +1,10 @@
+{
+    "sites": [
+    {
+        "name": "LY",
+        "type": 3,
+        "api": "csp_LY",
+        "ext": "https://ghp.xptvhelper.link/https://raw.githubusercontent.com/wangjian410/XPTV/refs/heads/main/js/LIBVIO_Y"
+    }
+    ]
+}
