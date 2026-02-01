@@ -1,0 +1,448 @@
+const CryptoJS = createCryptoJS()
+const cheerio = createCheerio()
+
+// LIBVIO 配置
+let deviceId = generateDeviceId()
+let sessionToken = ''
+
+let appConfig = {
+    ver: 20251202,
+    title: 'LIBVIO',
+    site: 'https://www.libvio.fun', // 可根据可用域名调整
+    tabs: [
+        {
+            id: '1',
+            name: '电影',
+            ext: {
+                type: '1',
+                category: 'movie',
+            },
+        },
+        {
+            id: '2', 
+            name: '电视剧',
+            ext: {
+                type: '2',
+                category: 'tv',
+            },
+        },
+        {
+            id: '3',
+            name: '综艺',
+            ext: {
+                type: '3',
+                category: 'variety',
+            },
+        },
+        {
+            id: '4',
+            name: '动漫',
+            ext: {
+                type: '4',
+                category: 'anime',
+            },
+        },
+        {
+            id: '5',
+            name: '纪录片',
+            ext: {
+                type: '5',
+                category: 'documentary',
+            },
+        },
+    ],
+}
+
+async function getConfig() {
+    return jsonify(appConfig)
+}
+
+async function getCards(ext) {
+    ext = argsify(ext)
+    let cards = []
+    let { type, category, page = 1 } = ext
+
+    try {
+        // 尝试多个可能的API路径
+        const apiPaths = [
+            '/api/video/list',
+            '/index.php/api/video/list', 
+            '/api.php/provide/vod',
+            '/api/v1/video/list'
+        ]
+        
+        for (const apiPath of apiPaths) {
+            try {
+                const url = appConfig.site + apiPath
+                const params = {
+                    type: type,
+                    page: page,
+                    limit: 20,
+                    t: Date.now()
+                }
+                
+                const headers = buildHeaders()
+                const response = await $fetch.get(`${url}?${buildQuery(params)}`, { headers })
+                
+                if (response && response.data) {
+                    const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+                    
+                    if (data.list || data.data) {
+                        const videoList = data.list || data.data
+                        videoList.forEach(item => {
+                            cards.push({
+                                vod_id: `${item.vod_id || item.id}`,
+                                vod_name: item.vod_name || item.name || item.title,
+                                vod_pic: item.vod_pic || item.pic || item.cover,
+                                vod_remarks: item.vod_remarks || item.note || '',
+                                vod_duration: item.vod_duration || item.duration || '',
+                                ext: {
+                                    id: `${item.vod_id || item.id}`,
+                                    type: type
+                                }
+                            })
+                        })
+                        break // 成功获取数据后跳出循环
+                    }
+                }
+            } catch (e) {
+                continue // 尝试下一个API路径
+            }
+        }
+        
+        // 如果API不可用，尝试解析HTML页面
+        if (cards.length === 0) {
+            cards = await parseHtmlList(type, page)
+        }
+
+        return jsonify({ list: cards })
+    } catch (error) {
+        $print('获取列表失败:', error)
+        return jsonify({ list: [] })
+    }
+}
+
+async function getTracks(ext) {
+    ext = argsify(ext)
+    let tracks = []
+    let { id, type } = ext
+
+    try {
+        const apiPaths = [
+            `/api/video/detail/${id}`,
+            `/index.php/api/video/detail?id=${id}`,
+            `/api.php/provide/vod?ids=${id}`,
+            `/api/v1/video/detail/${id}`
+        ]
+        
+        for (const apiPath of apiPaths) {
+            try {
+                const url = appConfig.site + apiPath
+                const headers = buildHeaders()
+                const response = await $fetch.get(url, { headers })
+                
+                if (response && response.data) {
+                    const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+                    const videoInfo = data.info || data.data || data
+                    
+                    if (videoInfo.vod_play_url || videoInfo.episodes) {
+                        const playData = videoInfo.vod_play_url || videoInfo.episodes
+                        
+                        if (typeof playData === 'string') {
+                            // 解析播放链接字符串格式
+                            const episodes = parsePlayUrls(playData)
+                            episodes.forEach((ep, index) => {
+                                tracks.push({
+                                    name: ep.name || `第${index + 1}集`,
+                                    pan: '',
+                                    ext: {
+                                        videoId: id,
+                                        episodeUrl: ep.url,
+                                        episodeIndex: index
+                                    }
+                                })
+                            })
+                        } else if (Array.isArray(playData)) {
+                            playData.forEach((ep, index) => {
+                                tracks.push({
+                                    name: ep.name || `第${index + 1}集`,
+                                    pan: '',
+                                    ext: {
+                                        videoId: id,
+                                        episodeUrl: ep.url,
+                                        episodeIndex: index
+                                    }
+                                })
+                            })
+                        }
+                        break
+                    }
+                }
+            } catch (e) {
+                continue
+            }
+        }
+        
+        // 如果API不可用，尝试解析HTML页面
+        if (tracks.length === 0) {
+            tracks = await parseHtmlDetail(id)
+        }
+
+        return jsonify({
+            list: [{
+                title: '播放列表',
+                tracks
+            }]
+        })
+    } catch (error) {
+        $print('获取剧集失败:', error)
+        return jsonify({ list: [] })
+    }
+}
+
+async function getPlayinfo(ext) {
+    ext = argsify(ext)
+    let { videoId, episodeUrl, episodeIndex } = ext
+
+    try {
+        if (episodeUrl) {
+            // 如果已有播放链接，直接返回
+            if (episodeUrl.startsWith('http')) {
+                return jsonify({ urls: [episodeUrl] })
+            }
+            
+            // 如果是相对路径或需要解析的链接
+            const playUrl = await parsePlayUrl(episodeUrl, videoId)
+            return jsonify({ urls: [playUrl] })
+        }
+        
+        return jsonify({ urls: [] })
+    } catch (error) {
+        $print('获取播放链接失败:', error)
+        return jsonify({ urls: [] })
+    }
+}
+
+async function search(ext) {
+    ext = argsify(ext)
+    let cards = []
+    const keyword = ext.text
+    const page = ext.page || 1
+
+    try {
+        const searchPaths = [
+            '/api/search',
+            '/index.php/api/search',
+            '/api.php/provide/vod',
+            '/search'
+        ]
+        
+        for (const searchPath of searchPaths) {
+            try {
+                const url = appConfig.site + searchPath
+                const params = {
+                    wd: keyword,
+                    page: page,
+                    limit: 20
+                }
+                
+                const headers = buildHeaders()
+                const response = await $fetch.get(`${url}?${buildQuery(params)}`, { headers })
+                
+                if (response && response.data) {
+                    const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+                    const results = data.list || data.data || []
+                    
+                    results.forEach(item => {
+                        cards.push({
+                            vod_id: `${item.vod_id || item.id}`,
+                            vod_name: item.vod_name || item.name || item.title,
+                            vod_pic: item.vod_pic || item.pic || item.cover,
+                            vod_remarks: item.vod_remarks || item.note || '',
+                            vod_duration: item.vod_duration || item.duration || '',
+                            ext: {
+                                id: `${item.vod_id || item.id}`,
+                                type: item.type_id || '1'
+                            }
+                        })
+                    })
+                    break
+                }
+            } catch (e) {
+                continue
+            }
+        }
+        
+        // 如果API搜索失败，尝试HTML页面搜索
+        if (cards.length === 0) {
+            cards = await parseHtmlSearch(keyword, page)
+        }
+
+        return jsonify({ list: cards })
+    } catch (error) {
+        $print('搜索失败:', error)
+        return jsonify({ list: [] })
+    }
+}
+
+// 工具函数
+function generateDeviceId() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0
+        const v = c === 'x' ? r : (r & 0x3 | 0x8)
+        return v.toString(16)
+    })
+}
+
+function buildHeaders() {
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': appConfig.site,
+        'X-Requested-With': 'XMLHttpRequest'
+    }
+}
+
+function buildQuery(params) {
+    return Object.keys(params)
+        .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+        .join('&')
+}
+
+function parsePlayUrls(playStr) {
+    // 解析常见的播放链接格式
+    const episodes = []
+    if (playStr.includes('$')) {
+        const parts = playStr.split('#')
+        parts.forEach(part => {
+            if (part.includes('$')) {
+                const [name, url] = part.split('$')
+                episodes.push({ name: name.trim(), url: url.trim() })
+            }
+        })
+    }
+    return episodes
+}
+
+async function parsePlayUrl(url, videoId) {
+    // 解析和处理播放链接
+    if (url.startsWith('http')) {
+        return url
+    }
+    
+    // 如果是加密或编码的链接，在这里处理
+    try {
+        // 示例：base64解码
+        if (url.match(/^[A-Za-z0-9+/=]+$/)) {
+            return atob(url)
+        }
+        
+        // 其他解密逻辑...
+        return appConfig.site + url
+    } catch (e) {
+        return url
+    }
+}
+
+// HTML解析备用方案
+async function parseHtmlList(type, page) {
+    try {
+        const url = `${appConfig.site}/type/${type}/${page}.html`
+        const { data } = await $fetch.get(url, { headers: buildHeaders() })
+        const $ = cheerio.load(data)
+        
+        const cards = []
+        $('.video-item, .movie-item, .list-item').each((i, el) => {
+            const $el = $(el)
+            const title = $el.find('.title, .name, h3, h4').text().trim()
+            const pic = $el.find('img').attr('src') || $el.find('img').attr('data-src')
+            const link = $el.find('a').attr('href')
+            
+            if (title && link) {
+                const id = link.match(/\/(\d+)\.html/) || link.match(/id\/(\d+)/)
+                cards.push({
+                    vod_id: id ? id[1] : Math.random().toString(),
+                    vod_name: title,
+                    vod_pic: pic || '',
+                    vod_remarks: $el.find('.note, .remarks').text().trim(),
+                    vod_duration: '',
+                    ext: {
+                        id: id ? id[1] : Math.random().toString(),
+                        type: type
+                    }
+                })
+            }
+        })
+        
+        return cards
+    } catch (e) {
+        return []
+    }
+}
+
+async function parseHtmlDetail(id) {
+    try {
+        const url = `${appConfig.site}/detail/${id}.html`
+        const { data } = await $fetch.get(url, { headers: buildHeaders() })
+        const $ = cheerio.load(data)
+        
+        const tracks = []
+        $('.episode-list a, .play-list a, .playlist a').each((i, el) => {
+            const $el = $(el)
+            const name = $el.text().trim()
+            const href = $el.attr('href')
+            
+            if (name && href) {
+                tracks.push({
+                    name: name,
+                    pan: '',
+                    ext: {
+                        videoId: id,
+                        episodeUrl: href,
+                        episodeIndex: i
+                    }
+                })
+            }
+        })
+        
+        return tracks
+    } catch (e) {
+        return []
+    }
+}
+
+async function parseHtmlSearch(keyword, page) {
+    try {
+        const url = `${appConfig.site}/search.html?wd=${encodeURIComponent(keyword)}&page=${page}`
+        const { data } = await $fetch.get(url, { headers: buildHeaders() })
+        const $ = cheerio.load(data)
+        
+        const cards = []
+        $('.search-item, .video-item, .movie-item').each((i, el) => {
+            const $el = $(el)
+            const title = $el.find('.title, .name, h3, h4').text().trim()
+            const pic = $el.find('img').attr('src') || $el.find('img').attr('data-src')
+            const link = $el.find('a').attr('href')
+            
+            if (title && link) {
+                const id = link.match(/\/(\d+)\.html/) || link.match(/id\/(\d+)/)
+                cards.push({
+                    vod_id: id ? id[1] : Math.random().toString(),
+                    vod_name: title,
+                    vod_pic: pic || '',
+                    vod_remarks: $el.find('.note, .remarks').text().trim(),
+                    vod_duration: '',
+                    ext: {
+                        id: id ? id[1] : Math.random().toString(),
+                        type: '1'
+                    }
+                })
+            }
+        })
+        
+        return cards
+    } catch (e) {
+        return []
+    }
+}
