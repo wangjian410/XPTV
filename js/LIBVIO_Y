@@ -114,7 +114,6 @@ async function getCards(ext) {
             list: cards,
         })
     } catch (error) {
-        $print('获取列表失败:', error)
         if (await tryBackupSite()) {
             return await getCards(ext)
         }
@@ -180,7 +179,6 @@ async function getTracks(ext) {
             list: allTracks,
         })
     } catch (error) {
-        $print('获取剧集失败:', error)
         if (await tryBackupSite()) {
             return await getTracks(ext)
         }
@@ -190,12 +188,9 @@ async function getTracks(ext) {
 
 async function getPlayinfo(ext) {
     ext = argsify(ext)
-    let { videoId, playUrl, episodeIndex } = ext
+    let { videoId, playUrl } = ext
 
     try {
-        $print('开始获取播放链接...')
-        $print('播放页面URL:', playUrl)
-        
         const url = playUrl.startsWith('http') ? playUrl : `${currentSite}${playUrl}`
         
         const headers = {
@@ -209,80 +204,76 @@ async function getPlayinfo(ext) {
         
         let realPlayUrl = ''
 
-        // 方法1: 使用正则提取 player_aaaa 配置
-        const playerConfigMatch = data.match(/var\s+player_\w+\s*=\s*(\{[^}]*"url"\s*:\s*"([^"]+)"[^}]*\})/)
-        if (playerConfigMatch && playerConfigMatch[2]) {
-            realPlayUrl = playerConfigMatch[2]
-            $print('方法1提取到URL:', realPlayUrl)
+        // 尝试多种方式提取播放链接
+        
+        // 方式1: 匹配 "url":"xxx" 格式
+        let match = data.match(/"url"\s*:\s*"([^"]+)"/)
+        if (match) {
+            realPlayUrl = match[1]
         }
 
-        // 方法2: 提取完整的 player 配置并解析
+        // 方式2: 匹配 'url':'xxx' 格式
         if (!realPlayUrl) {
-            const fullPlayerMatch = data.match(/var\s+player_\w+\s*=\s*(\{[\s\S]*?\});/)
-            if (fullPlayerMatch) {
-                try {
-                    let configStr = fullPlayerMatch[1]
-                    // 清理注释
-                    configStr = configStr.replace(/\/\*[\s\S]*?\*\//g, '')
-                    configStr = configStr.replace(/\/\/.*/g, '')
-                    
-                    // 尝试提取 url 字段
-                    const urlInConfig = configStr.match(/"url"\s*:\s*"([^"]+)"/)
-                    if (urlInConfig) {
-                        realPlayUrl = urlInConfig[1]
-                        $print('方法2提取到URL:', realPlayUrl)
-                    }
-                } catch (e) {
-                    $print('解析配置失败:', e)
-                }
+            match = data.match(/'url'\s*:\s*'([^']+)'/)
+            if (match) {
+                realPlayUrl = match[1]
             }
         }
 
-        // 方法3: 直接匹配 m3u8 链接
+        // 方式3: 匹配 url: "xxx" 格式（无引号key）
         if (!realPlayUrl) {
-            const m3u8Match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
-            if (m3u8Match) {
-                realPlayUrl = m3u8Match[1]
-                $print('方法3提取到URL:', realPlayUrl)
+            match = data.match(/url\s*:\s*"([^"]+)"/)
+            if (match) {
+                realPlayUrl = match[1]
             }
         }
 
-        // 方法4: 匹配任何视频链接
+        // 方式4: 直接匹配 .m3u8 链接
         if (!realPlayUrl) {
-            const videoMatch = data.match(/(https?:\/\/[^\s"'<>]+\.(mp4|m3u8|flv)[^\s"'<>]*)/)
-            if (videoMatch) {
-                realPlayUrl = videoMatch[1]
-                $print('方法4提取到URL:', realPlayUrl)
+            match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
+            if (match) {
+                realPlayUrl = match[1]
             }
         }
 
-        // 方法5: 使用 cheerio 解析
+        // 方式5: 匹配 .mp4 链接
+        if (!realPlayUrl) {
+            match = data.match(/(https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*)/)
+            if (match) {
+                realPlayUrl = match[1]
+            }
+        }
+
+        // 方式6: 从 MacCMS 播放器配置中提取
+        if (!realPlayUrl) {
+            match = data.match(/var\s+player_\w+\s*=\s*\{[^}]*url['":\s]+([^'",}\s]+)/)
+            if (match) {
+                realPlayUrl = match[1]
+            }
+        }
+
+        // 方式7: 检查是否有 iframe 嵌套播放器
         if (!realPlayUrl) {
             const $ = cheerio.load(data)
-            
-            // 检查 iframe
             const iframeSrc = $('iframe').attr('src')
-            if (iframeSrc) {
-                $print('找到iframe:', iframeSrc)
-                // 如果是第三方播放器，可能需要再次请求
-                if (iframeSrc.includes('.m3u8') || iframeSrc.includes('.mp4')) {
-                    realPlayUrl = iframeSrc
-                    $print('方法5-iframe提取到URL:', realPlayUrl)
-                }
-            }
-
-            // 检查 video 标签
-            if (!realPlayUrl) {
-                const videoSrc = $('video source').attr('src') || $('video').attr('src')
-                if (videoSrc) {
-                    realPlayUrl = videoSrc
-                    $print('方法5-video提取到URL:', realPlayUrl)
+            if (iframeSrc && (iframeSrc.includes('.m3u8') || iframeSrc.includes('.mp4'))) {
+                realPlayUrl = iframeSrc
+            } else if (iframeSrc && iframeSrc.startsWith('http')) {
+                // 如果 iframe 是第三方播放器，尝试请求它
+                try {
+                    const iframeData = await $fetch.get(iframeSrc, { headers })
+                    const iframeMatch = iframeData.data.match(/(https?:\/\/[^\s"'<>]+\.(m3u8|mp4)[^\s"'<>]*)/)
+                    if (iframeMatch) {
+                        realPlayUrl = iframeMatch[1]
+                    }
+                } catch (e) {
+                    // iframe 请求失败，继续其他方法
                 }
             }
         }
 
         if (realPlayUrl) {
-            // 清理 URL
+            // 清理和标准化 URL
             realPlayUrl = realPlayUrl.replace(/\\/g, '')
             realPlayUrl = realPlayUrl.trim()
             
@@ -295,15 +286,20 @@ async function getPlayinfo(ext) {
                 }
             }
 
-            $print('最终播放URL:', realPlayUrl)
+            // 解码可能的 URL 编码
+            try {
+                if (realPlayUrl.includes('%')) {
+                    realPlayUrl = decodeURIComponent(realPlayUrl)
+                }
+            } catch (e) {
+                // 解码失败，使用原始 URL
+            }
+
             return jsonify({ urls: [realPlayUrl] })
         }
 
-        $print('未找到播放链接，输出页面前500字符:')
-        $print(data.substring(0, 500))
         return jsonify({ urls: [] })
     } catch (error) {
-        $print('获取播放链接失败:', error)
         return jsonify({ urls: [] })
     }
 }
@@ -367,7 +363,6 @@ async function search(ext) {
             list: cards,
         })
     } catch (error) {
-        $print('搜索失败:', error)
         if (await tryBackupSite()) {
             return await search(ext)
         }
@@ -387,7 +382,6 @@ async function tryBackupSite() {
                 })
                 if (data) {
                     currentSite = site
-                    $print('切换到备用域名:', site)
                     return true
                 }
             } catch (e) {
