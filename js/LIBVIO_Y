@@ -1,3 +1,5 @@
+const cheerio = createCheerio()
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
 let appConfig = {
@@ -14,11 +16,36 @@ async function getConfig() {
 
 async function getTabs() {
     let list = [
-        { name: '电影', ext: { url: appConfig.site + '/type/1.html', id: '1' } },
-        { name: '剧集', ext: { url: appConfig.site + '/type/2.html', id: '2' } },
-        { name: '动漫', ext: { url: appConfig.site + '/type/4.html', id: '4' } },
-        { name: '日韩剧', ext: { url: appConfig.site + '/type/15.html', id: '15' } },
-        { name: '欧美剧', ext: { url: appConfig.site + '/type/16.html', id: '16' } },
+        {
+            name: '电影',
+            ext: {
+                url: appConfig.site + '/type/1.html',
+            },
+        },
+        {
+            name: '剧集',
+            ext: {
+                url: appConfig.site + '/type/2.html',
+            },
+        },
+        {
+            name: '动漫',
+            ext: {
+                url: appConfig.site + '/type/4.html',
+            },
+        },
+        {
+            name: '日韩剧',
+            ext: {
+                url: appConfig.site + '/type/15.html',
+            },
+        },
+        {
+            name: '欧美剧',
+            ext: {
+                url: appConfig.site + '/type/16.html',
+            },
+        },
     ]
     return list
 }
@@ -27,41 +54,43 @@ async function getCards(ext) {
     ext = argsify(ext)
     let cards = []
     let { page = 1, url } = ext
-    
-    if (page > 1) {
+
+    if (page > 1 && url) {
         url = url.replace('.html', `/page/${page}.html`)
     }
-    
-    const { data } = await $fetch.get(url, {
-        headers: {
-            'User-Agent': UA,
-        },
-    })
-    
-    const $ = cheerio.load(data)
-    
-    // 解析影片列表
-    $('.stui-vodlist__box').each((_, element) => {
-        const href = $(element).find('a').attr('href')
-        const title = $(element).find('.pic-text').text() || $(element).find('img').attr('alt')
-        const cover = $(element).find('img').attr('data-original') || $(element).find('img').attr('src')
-        const subTitle = $(element).find('.pic-text').text()
-        
-        if (href && title) {
-            const fullUrl = href.startsWith('http') ? href : appConfig.site + href
-            cards.push({
-                vod_id: href,
-                vod_name: title.trim(),
-                vod_pic: cover,
-                vod_remarks: subTitle,
-                url: fullUrl,
-                ext: {
-                    url: fullUrl,
-                },
-            })
-        }
-    })
-    
+
+    try {
+        const { data } = await $fetch.get(url, {
+            headers: {
+                'User-Agent': UA,
+            },
+        })
+
+        const $ = cheerio.load(data)
+
+        $('.stui-vodlist__box').each((_, element) => {
+            const href = $(element).find('a').attr('href')
+            const title = $(element).find('.pic-text').text() || $(element).find('img').attr('alt')
+            const cover = $(element).find('img').attr('data-original') || $(element).find('img').attr('src')
+            const subTitle = $(element).find('.pic-text').text()
+
+            if (href && title) {
+                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                cards.push({
+                    vod_id: href,
+                    vod_name: title.trim(),
+                    vod_pic: cover,
+                    vod_remarks: subTitle,
+                    ext: {
+                        url: fullUrl,
+                    },
+                })
+            }
+        })
+    } catch (error) {
+        $print(error)
+    }
+
     return jsonify({
         list: cards,
     })
@@ -71,120 +100,131 @@ async function getTracks(ext) {
     ext = argsify(ext)
     let tracks = []
     let url = ext.url
-    
-    const { data } = await $fetch.get(url, {
-        headers: {
-            'User-Agent': UA,
-        },
-    })
-    
-    const $ = cheerio.load(data)
-    
-    // 解析播放线路和集数
-    // LIBVIO 播放线路结构: 每个线路有一个h3标题和对应的ul列表
-    const playLines = []
-    
-    // 查找所有播放线路
-    $('.stui-play__list').each((_, element) => {
-        // 获取线路名称（在h3标签中）
-        const lineName = $(element).prev('h3').text().trim() || $(element).prev().find('h3').text().trim()
-        
-        const episodes = []
-        $(element).find('li a').each((_, e) => {
-            const name = $(e).text().trim()
-            const href = $(e).attr('href')
-            if (href && name) {
-                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
-                episodes.push({
-                    name: name,
-                    ext: {
-                        url: fullUrl,
-                    },
-                })
-            }
+
+    try {
+        const { data } = await $fetch.get(url, {
+            headers: {
+                'User-Agent': UA,
+            },
         })
-        
-        if (episodes.length > 0) {
-            playLines.push({
-                title: lineName || '默认线路',
-                list: episodes
-            })
-        }
-    })
-    
-    // 如果没有找到，尝试其他选择器
-    if (playLines.length === 0) {
-        // 尝试查找所有包含 /play/ 链接的元素
-        $('a[href*="/play/"]').each((_, e) => {
-            const href = $(e).attr('href')
-            const name = $(e).text().trim()
-            
-            // 提取线路信息
-            const lineMatch = href.match(/\/play\/(\d+)-(\d+)-(\d+)\.html/)
-            if (lineMatch && name) {
-                const sid = lineMatch[2]
-                let lineName = '线路' + sid
-                if (sid === '1') lineName = 'BD5播放'
-                else if (sid === '2') lineName = 'BD播放'
-                
-                // 查找是否已有该线路
-                let existingLine = playLines.find(l => l.title === lineName)
-                if (!existingLine) {
-                    existingLine = { title: lineName, list: [] }
-                    playLines.push(existingLine)
+
+        const $ = cheerio.load(data)
+
+        // 解析播放线路和集数
+        $('.stui-play__list').each((_, element) => {
+            const lineName = $(element).prev('h3').text().trim() || $(element).prev().find('h3').text().trim()
+
+            const episodes = []
+            $(element).find('li a').each((_, e) => {
+                const name = $(e).text().trim()
+                const href = $(e).attr('href')
+                if (href && name) {
+                    const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                    episodes.push({
+                        name: name,
+                        pan: '',
+                        ext: {
+                            url: fullUrl,
+                        },
+                    })
                 }
-                
-                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
-                existingLine.list.push({
-                    name: name,
-                    ext: {
-                        url: fullUrl,
-                    },
+            })
+
+            if (episodes.length > 0) {
+                tracks.push({
+                    name: lineName || '默认线路',
+                    list: episodes
                 })
             }
         })
+
+        // 如果没有找到，尝试查找所有包含 /play/ 链接的元素
+        if (tracks.length === 0) {
+            const lineGroups = {}
+
+            $('a[href*="/play/"]').each((_, e) => {
+                const href = $(e).attr('href')
+                const name = $(e).text().trim()
+
+                const lineMatch = href.match(/\/play\/(\d+)-(\d+)-(\d+)\.html/)
+                if (lineMatch && name) {
+                    const sid = lineMatch[2]
+                    let lineName = '线路' + sid
+                    if (sid === '1') lineName = 'BD5播放'
+                    else if (sid === '2') lineName = 'BD播放'
+
+                    if (!lineGroups[lineName]) {
+                        lineGroups[lineName] = []
+                    }
+
+                    const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                    lineGroups[lineName].push({
+                        name: name,
+                        pan: '',
+                        ext: {
+                            url: fullUrl,
+                        },
+                    })
+                }
+            })
+
+            // 转换为 tracks 格式
+            for (const [name, list] of Object.entries(lineGroups)) {
+                if (list.length > 0) {
+                    tracks.push({
+                        name: name,
+                        list: list
+                    })
+                }
+            }
+        }
+    } catch (error) {
+        $print(error)
     }
-    
+
     return jsonify({
-        list: playLines,
+        list: [
+            {
+                title: '默认分组',
+                tracks,
+            },
+        ],
     })
 }
 
 async function getPlayinfo(ext) {
     ext = argsify(ext)
     const url = ext.url
-    
-    const { data } = await $fetch.get(url, {
-        headers: {
-            'User-Agent': UA,
-        },
-    })
-    
     let playurl = ''
-    
+
     try {
+        const { data } = await $fetch.get(url, {
+            headers: {
+                'User-Agent': UA,
+            },
+        })
+
         // LIBVIO 播放器配置在 player_aaaa 变量中
         const match = data.match(/var\s+player_\w+\s*=\s*(\{[^}]+\})/)
         if (match) {
             const playerConfig = JSON.parse(match[1])
             playurl = playerConfig.url
-            
             $print('解析成功，视频URL: ' + playurl)
         } else {
             $print('未找到播放器配置')
         }
     } catch (error) {
-        $print('解析失败: ' + error)
+        $print(error)
     }
-    
+
     return jsonify({
         urls: [playurl],
         headers: [
             {
                 'User-Agent': UA,
-                'Referer': appConfig.site
-            }
-        ]
+                Referer: appConfig.site,
+            },
+        ],
     })
 }
 
@@ -194,40 +234,43 @@ async function search(ext) {
     let text = encodeURIComponent(ext.text)
     let page = ext.page || 1
     let url = `${appConfig.site}/search/-------------.html?wd=${text}`
-    
+
     if (page > 1) {
         url += `&page=${page}`
     }
-    
-    const { data } = await $fetch.get(url, {
-        headers: {
-            'User-Agent': UA,
-        },
-    })
-    
-    const $ = cheerio.load(data)
-    
-    $('.stui-vodlist__box').each((_, element) => {
-        const href = $(element).find('a').attr('href')
-        const title = $(element).find('.pic-text').text() || $(element).find('img').attr('alt')
-        const cover = $(element).find('img').attr('data-original') || $(element).find('img').attr('src')
-        const subTitle = $(element).find('.pic-text').text()
-        
-        if (href && title) {
-            const fullUrl = href.startsWith('http') ? href : appConfig.site + href
-            cards.push({
-                vod_id: href,
-                vod_name: title.trim(),
-                vod_pic: cover,
-                vod_remarks: subTitle,
-                url: fullUrl,
-                ext: {
-                    url: fullUrl,
-                },
-            })
-        }
-    })
-    
+
+    try {
+        const { data } = await $fetch.get(url, {
+            headers: {
+                'User-Agent': UA,
+            },
+        })
+
+        const $ = cheerio.load(data)
+
+        $('.stui-vodlist__box').each((_, element) => {
+            const href = $(element).find('a').attr('href')
+            const title = $(element).find('.pic-text').text() || $(element).find('img').attr('alt')
+            const cover = $(element).find('img').attr('data-original') || $(element).find('img').attr('src')
+            const subTitle = $(element).find('.pic-text').text()
+
+            if (href && title) {
+                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                cards.push({
+                    vod_id: href,
+                    vod_name: title.trim(),
+                    vod_pic: cover,
+                    vod_remarks: subTitle,
+                    ext: {
+                        url: fullUrl,
+                    },
+                })
+            }
+        })
+    } catch (error) {
+        $print(error)
+    }
+
     return jsonify({
         list: cards,
     })
