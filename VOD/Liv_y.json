@@ -1,16 +1,16 @@
 {
     "sites": [
-   {
-        "name": "LY",
-        "type": 3,
-        "api": "csp_LY",
-        "ext": "https://ghp.xptvhelper.link/https://raw.githubusercontent.com/wangjian410/XPTV/refs/heads/main/js/LIBVIO_Y"
-    },
-    {
-        "name": "CY",
-        "type": 3,
-        "api": "cczy_LY",
-        "ext": "https://ghp.xptvhelper.link/https://raw.githubusercontent.com/wangjian410/XPTV/refs/heads/main/js/cczy_y"
-    }
+        {
+            "name": "LY",
+            "type": 3,
+            "api": "csp_LY",
+            "ext": "https://ghp.xptvhelper.link/https://raw.githubusercontent.com/wangjian410/XPTV/refs/heads/main/js/LIBVIO_Y"
+        },
+        {
+            "name": "cczy",
+            "type": 3,
+            "api": "csp_cczy",
+            "ext": "https://ghp.xptvhelper.link/https://raw.githubusercontent.com/wangjian410/XPTV/refs/heads/main/js/cczy_y"
+        }
     ]
 }
