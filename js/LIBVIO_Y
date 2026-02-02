@@ -94,11 +94,11 @@ async function getTracks(ext) {
             const name = $(e).text().trim()
             const href = $(e).attr('href')
             if (href && name) {
+                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
                 episodes.push({
                     name: name,
-                    pan: '',
                     ext: {
-                        url: href.startsWith('http') ? href : appConfig.site + href,
+                        url: fullUrl,
                     },
                 })
             }
@@ -107,7 +107,7 @@ async function getTracks(ext) {
         if (episodes.length > 0) {
             playLines.push({
                 title: lineName || '默认线路',
-                tracks: episodes
+                list: episodes
             })
         }
     })
@@ -130,15 +130,15 @@ async function getTracks(ext) {
                 // 查找是否已有该线路
                 let existingLine = playLines.find(l => l.title === lineName)
                 if (!existingLine) {
-                    existingLine = { title: lineName, tracks: [] }
+                    existingLine = { title: lineName, list: [] }
                     playLines.push(existingLine)
                 }
                 
-                existingLine.tracks.push({
+                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                existingLine.list.push({
                     name: name,
-                    pan: '',
                     ext: {
-                        url: href.startsWith('http') ? href : appConfig.site + href,
+                        url: fullUrl,
                     },
                 })
             }
@@ -231,9 +231,4 @@ async function search(ext) {
     return jsonify({
         list: cards,
     })
-}
-
-// 导出
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { getConfig, getTabs, getCards, getTracks, getPlayinfo, search }
 }
