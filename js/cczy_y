@@ -655,8 +655,20 @@ async function bypass_waf(html, url) {
                 },
             }
         )
-        $print(JSON.stringify(verify))
+        $print('WAF验证完成: ' + JSON.stringify(verify))
+        
+        // 验证成功后，重新请求原页面获取真实内容
+        $print('重新请求页面...')
+        let retry = await $fetch.get(url, {
+            headers: {
+                'User-Agent': header['User-Agent'],
+                'Referer': url,
+            },
+        })
+        
+        return retry.data
     } catch (error) {
-        $print(error)
+        $print('WAF绕过失败: ' + error)
+        return html
     }
 }
