@@ -1,237 +1,49 @@
-const cheerio = createCheerio()
+自定义配置按照你的实际情况填入下列信息{"sniffer":"http://192.168.50.9:18000"}
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 
-const appConfig = {
-  ver: 1,
-  title: 'LIBVIO',
-  site: 'https://www.libvio.site',  // 如果换域名，这里改
-  tabs: [
-    { name: '首页', ext: { url: '/', hasMore: false } },
-    { name: '电影', ext: { url: '/vodshow/1--------{page}---.html' } },  // 2026主流格式，如果是/type/20-1.html，换成它
-    { name: '剧集', ext: { url: '/vodshow/2--------{page}---.html' } },
-    { name: '动漫', ext: { url: '/vodshow/3--------{page}---.html' } },
-    { name: '综艺', ext: { url: '/vodshow/4--------{page}---.html' } },
-    { name: '日韩剧', ext: { url: '/vodshow/13--------{page}---.html' } },
-    { name: '欧美剧', ext: { url: '/vodshow/14--------{page}---.html' } }
-  ]
-}
+let $config = argsify($config_str)
 
-async function getConfig() {
-  return jsonify(appConfig)
-}
+//方法一，不需要cookie等各种参数直接用get即可
+async function getPlayinfo(ext) {
+    ext = argsify(ext)
+    let url = https://www.libvio.site
 
-async function getCards(ext) {
-  ext = argsify(ext)
-  let cards = []
-  let url = ext.url
-  let page = ext.page || 1
-  let hasMore = ext.hasMore !== undefined ? ext.hasMore : true
-
-  if (!hasMore && page > 1) return jsonify({ list: cards })
-
-  // 分页兼容
-  url = url.replace('{page}', page).replace('-1.html', `-${page}.html`)
-  url = url.startsWith('http') ? url : appConfig.site + url
-
-  const headers = { 'User-Agent': UA, 'Referer': appConfig.site + '/', 'Origin': appConfig.site }
-
-  const { data: html } = await $fetch.get(url, { headers }).catch(() => ({ data: '' }))
-  if (!html) return jsonify({ list: [], note: '请求失败' })
-
-  const $ = cheerio.load(html)
-
-  // 多选择器策略，按2026年概率排序
-  const strategies = [
-    { card: 'div.module-item', pic: 'img[data-src],img[src]', title: '.module-item-title', remark: '.module-item-note', link: 'a.module-item-pic' },
-    { card: 'a.stui-vodlist__thumb', pic: '[data-original]', title: '[title]', remark: '.pic-text', link: '' },
-    { card: 'div.hl-list-item,li.vodlist-item', pic: 'img[data-src],img[src]', title: '.title,.vodlist-title', remark: '.note,.pic-text', link: 'a' }
-  ]
-
-  let addedIds = new Set()
-  let found = false
-
-  for (const sel of strategies) {
-    $(sel.card).each((i, el) => {
-      const $el = $(el)
-      let $link = sel.link ? $el.find(sel.link) : $el
-      const href = $link.attr('href')
-
-      if (href && /detail|voddetail/.test(href) && !addedIds.has(href)) {
-        addedIds.add(href)
-        const pic = $el.find(sel.pic).attr('data-src') || $el.find(sel.pic).attr('src') || $el.find(sel.pic).attr('data-original') || ''
-        const name = $el.find(sel.title).text().trim() || $link.attr('title') || ''
-        const remarks = $el.find(sel.remark).text().trim()
-
-        if (name) {
-          found = true
-          cards.push({
-            vod_id: href,
-            vod_name: name,
-            vod_pic: pic.startsWith('//') ? 'https:' + pic : pic,
-            vod_remarks: remarks,
-            ext: { url: appConfig.site + href }
-          })
-        }
-      }
+    const { data } = await $fetch.get(`${$config.sniffer}/getplayurl?url=${url}`, {
+        header
     })
-    if (found) break
-  }
+        return jsonify({ urls: [argsify(data).result.first.url], headers: [argsify(data).result.first.headers] })
 
-  return jsonify({ list: cards, note: found ? '' : '无匹配元素' })
 }
 
-async function getTracks(ext) {
-  ext = argsify(ext)
-  const detailUrl = ext.url.startsWith('http') ? ext.url : appConfig.site + ext.url
-  let allTracks = []
 
-  const headers = { 'User-Agent': UA, 'Referer': appConfig.site + '/', 'Origin': appConfig.site }
+//方法二，自定义参数
 
-  const { data: html } = await $fetch.get(detailUrl, { headers }).catch(() => ({ data: '' }))
-  if (!html) return jsonify({ list: [] })
-
-  const $ = cheerio.load(html)
-
-  // 多播放列表选择器
-  const playlistSels = ['.module-play-list', '.stui-content__playlist', '.playlist,.anthology-list-play']
-  let playlists = []
-  playlistSels.forEach(sel => playlists = playlists.concat($(sel).toArray()))
-
-  let index = 0
-  for (const playlist of playlists) {
-    const $playlist = $(playlist)
-    let title = $playlist.prevAll('h3,h4,.module-tab-item').first().text().trim() || `线路${++index}`
-
-    if (title.includes('磁力') || title.includes('下载')) continue
-
-    let tracks = []
-    $playlist.find('li a').each((i, el) => {
-      const name = $(el).text().trim()
-      const href = $(el).attr('href')
-      if (name && href) {
-        tracks.push({
-          name,
-          ext: { url: appConfig.site + href }
-        })
-      }
-    })
-
-    if (tracks.length > 0) allTracks.push({ title, tracks })
-  }
-
-  return jsonify({ list: allTracks })
+{
+  "url": 目标链接,
+  "first": 0,//检测都一个链接就直接返回，否则继续抓候选链接   1=开，0=关，默认开
+  "limit":0,//候选的限制条数，默认5
+  "triggerplay": 0,//是否触发播放，默认关闭
+  "speed":0,//是否极速模式，屏蔽图片/字体/CSS，默认打开
+  "cookie": "xxx",
+  "ua" :[
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+]
 }
+
 
 async function getPlayinfo(ext) {
-  ext = argsify(ext)
-  let playUrl = ext.url.startsWith('http') ? ext.url : appConfig.site + ext.url
+    ext = argsify(ext)
+    let url = ext.url
 
-  // headers严格模拟浏览器（基于你的截图UA和Referer）
-  const playHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-    'Referer': playUrl,  // 关键，防盗链
-    'Origin': appConfig.site,
-    'Accept': '*/*',
-    'Accept-Encoding': 'identity;q=1, *;q=0',  // 匹配截图
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Connection': 'keep-alive',
-    'Sec-Fetch-Dest': 'video',
-    'Sec-Fetch-Mode': 'no-cors',
-    'Sec-Fetch-Site': 'cross-site'
-  }
+    const {data}= await $fetch.post(`${$config.sniffer}/getplayurl`, JSON.stringify({
+        "url": url,
+        "ua": [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+        ]}, {
+        'User-Agent': UA,
+        'Content-Type': 'application/json',
+    }))
 
-  let html = ''
-  try {
-    const resp = await $fetch.get(playUrl, { headers: playHeaders })
-    html = resp.data || ''
-  } catch (e) {
-    return jsonify({ urls: [], note: '播放页请求失败: ' + e.message })
-  }
+    return jsonify({ urls: [argsify(data).result.first.url], headers: [argsify(data).result.first.headers] })
 
-  if (!html) return jsonify({ urls: [], note: '播放页内容为空' })
-
-  let realUrl = ''
-  let note = ''
-
-  // 增强提取patterns，按2026 libvio常见顺序
-  const extractPatterns = [
-    // 1. 直接抓明文视频URL（基于你的截图风格，优先MP4）
-    { re: /"url"\s*:\s*["']?(https?:\/\/[^"']+\.(mp4|m3u8|flv|ts)[^"']*)["']?/ig, group: 1 },
-    // 2. 各种player config变体（常见fork后改名）
-    { re: /(?:player_aaaa|player_data|playerConfig|config|videoInfo|playData|mediaConfig)\s*[=:]\s*({.+?})(?:<\/script>|['"]?\s*[,;}\s])/s, needParse: true },
-    // 3. 内嵌iframe或src（部分模板直接用）
-    { re: /<iframe[^>]+src=["']?(https?:\/\/[^"']+\.(mp4|m3u8)?[^"']*)["']?/i, group: 1 },
-    // 4. var player = {} 老风格
-    { re: /var\s+(?:player|config|data)\s*=\s*({.+?});/s, needParse: true },
-    // 5. 宽松抓任何http mp4链接（防遗漏）
-    { re: /(https?:\/\/[^"'\s]+\.(mp4|m3u8|flv|ts)[^"'\s]*)/ig, group: 1 }
-  ]
-
-  for (const pat of extractPatterns) {
-    const matches = html.matchAll(pat.re)
-    for (const match of matches) {
-      if (pat.group) {
-        realUrl = match[pat.group].replace(/\\/g, '').trim()
-        if (realUrl.startsWith('http') && (realUrl.includes('.mp4') || realUrl.includes('.m3u8'))) {
-          note = '直接提取明文URL'
-          break
-        }
-      }
-
-      if (pat.needParse) {
-        try {
-          let jsonStr = match[1].trim().replace(/'/g, '"')  // 容错单引号
-          // 简单修复不标准JSON
-          jsonStr = jsonStr.replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3')
-          const cfg = JSON.parse(jsonStr)
-          const possibleUrls = [cfg.url, cfg.playUrl, cfg.video, cfg.src, cfg.mediaUrl, cfg.link]
-          for (const u of possibleUrls) {
-            if (u && u.startsWith('http')) {
-              realUrl = u.replace(/\\/g, '').trim()
-              note = '从config提取'
-              break
-            }
-          }
-          if (realUrl) break
-        } catch (e) {
-          note += 'JSON解析失败: ' + e.message + '; '
-        }
-      }
-    }
-    if (realUrl) break
-  }
-
-  // 如果是相对路径或短链，补全
-  if (realUrl && !realUrl.startsWith('http')) {
-    realUrl = appConfig.site + (realUrl.startsWith('/') ? realUrl : '/' + realUrl)
-  }
-
-  // 兜底（但基于截图，不太需要）
-  if (!realUrl) {
-    realUrl = `${appConfig.site}/api/?url=${encodeURIComponent(playUrl)}`
-    note = '未匹配，使用兜底API'
-  }
-
-  return jsonify({
-    urls: [realUrl],
-    parse: realUrl.includes('.m3u8') || realUrl.includes('.mp4') ? 0 : 1,
-    note: note
-  })
-}
-
-async function search(ext) {
-  ext = argsify(ext)
-  const keyword = encodeURIComponent(ext.text)
-  const page = ext.page || 1
-  if (page > 1) return jsonify({ list: [] })
-
-  const searchUrl = appConfig.site + `/vodsearch/${keyword}----------${page}---.html`
-
-  ext.url = searchUrl
-  return await getCards(ext)  // 复用getCards
-}
-
-function dictToURI(params) {
-  return Object.entries(params).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
 }
