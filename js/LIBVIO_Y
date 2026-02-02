@@ -1,287 +1,239 @@
-/**
- * XPTV - LIBVIO 播放源扩展
- * 
- * 版本: 1.0
- * 作者: Auto Generated
- * 日期: 2026-02-02
- * 
- * 播放机制说明：
- * =====================
- * 1. 网站地址: http://www.libvio.site
- * 2. 视频格式: MP4 直链
- * 3. 播放页URL格式: /play/{id}-{sid}-{nid}.html
- *    - {id}: 影片ID (如: 714893168)
- *    - {sid}: 线路ID (1=BD5播放, 2=BD播放)
- *    - {nid}: 集数 (1, 2, 3...)
- * 4. 视频URL从页面中的 player_aaaa JSON 变量提取
- * 
- * 线路说明：
- * =====================
- * - BD5播放 (sid=1): 返回明文MP4链接，可直接播放 ✓ 推荐使用
- * - BD播放 (sid=2): 返回加密链接，需要额外处理
- * 
- * 使用方法：
- * =====================
- * 将此代码复制到 XPTV 的"扩展"或"自定义源"配置中
- */
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
-const libvioExt = {
-  name: 'LIBVIO',
-  version: '1.0',
-  
-  // 网站配置
-  config: {
-    baseUrl: 'http://www.libvio.site',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'http://www.libvio.site'
-    }
-  },
-  
-  // 分类
-  categories: [
-    { name: '电影', id: '1', url: 'http://www.libvio.site/type/1.html' },
-    { name: '剧集', id: '2', url: 'http://www.libvio.site/type/2.html' },
-    { name: '动漫', id: '4', url: 'http://www.libvio.site/type/4.html' },
-    { name: '日韩剧', id: '15', url: 'http://www.libvio.site/type/15.html' },
-    { name: '欧美剧', id: '16', url: 'http://www.libvio.site/type/16.html' }
-  ],
-  
-  // 搜索
-  search: {
-    url: 'http://www.libvio.site/search/-------------.html?wd={keyword}'
-  },
-  
-  // 获取视频播放URL (核心函数)
-  async getPlayUrl(id, sid = 1, nid = 1) {
-    const playUrl = `${this.config.baseUrl}/play/${id}-${sid}-${nid}.html`;
+let appConfig = {
+    ver: 1,
+    title: 'LIBVIO',
+    site: 'http://www.libvio.site',
+}
+
+async function getConfig() {
+    let config = appConfig
+    config.tabs = await getTabs()
+    return jsonify(config)
+}
+
+async function getTabs() {
+    let list = [
+        { name: '电影', ext: { url: appConfig.site + '/type/1.html', id: '1' } },
+        { name: '剧集', ext: { url: appConfig.site + '/type/2.html', id: '2' } },
+        { name: '动漫', ext: { url: appConfig.site + '/type/4.html', id: '4' } },
+        { name: '日韩剧', ext: { url: appConfig.site + '/type/15.html', id: '15' } },
+        { name: '欧美剧', ext: { url: appConfig.site + '/type/16.html', id: '16' } },
+    ]
+    return list
+}
+
+async function getCards(ext) {
+    ext = argsify(ext)
+    let cards = []
+    let { page = 1, url } = ext
     
-    try {
-      const response = await fetch(playUrl, {
-        headers: this.config.headers
-      });
-      
-      const html = await response.text();
-      
-      // 提取 player_aaaa JSON
-      const match = html.match(/var\s+player_\w+\s*=\s*(\{[^}]+\})/);
-      if (!match) {
-        throw new Error('未找到播放器配置');
-      }
-      
-      const player = JSON.parse(match[1]);
-      
-      return {
-        // 视频播放URL (MP4格式)
-        url: player.url,
-        
-        // 视频类型
-        type: 'mp4',
-        
-        // 请求头 (某些视频可能需要Referer)
+    if (page > 1) {
+        url = url.replace('.html', `/page/${page}.html`)
+    }
+    
+    const { data } = await $fetch.get(url, {
         headers: {
-          'Referer': this.config.baseUrl,
-          'User-Agent': this.config.headers['User-Agent']
+            'User-Agent': UA,
         },
-        
-        // 额外信息
-        info: {
-          title: '', // 需要在详情页获取
-          episode: `第${player.nid}集`,
-          line: sid === 1 ? 'BD5播放' : 'BD播放',
-          nextUrl: player.link_next ? this.config.baseUrl + player.link_next : null,
-          prevUrl: player.link_pre ? this.config.baseUrl + player.link_pre : null
-        }
-      };
-      
-    } catch (error) {
-      console.error('获取播放URL失败:', error);
-      return null;
-    }
-  },
-  
-  // 获取影片详情
-  async getDetail(id) {
-    const detailUrl = `${this.config.baseUrl}/detail/${id}.html`;
+    })
     
-    try {
-      const response = await fetch(detailUrl, {
-        headers: this.config.headers
-      });
-      
-      const html = await response.text();
-      
-      // 解析标题
-      const titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/);
-      const title = titleMatch ? titleMatch[1].trim() : '';
-      
-      // 解析评分
-      const ratingMatch = html.match(/(\d+\.\d+)分/);
-      const rating = ratingMatch ? ratingMatch[1] : '';
-      
-      // 解析简介
-      const descMatch = html.match(/简介[：:]\s*([^<]+)</);
-      const description = descMatch ? descMatch[1].trim() : '';
-      
-      // 解析播放线路
-      const lines = [];
-      const linePattern = /<h3>\s*([^<]+?)\s*<\/h3>[\s\S]*?<ul[^>]*class="stui-play__list"[^>]*>([\s\S]*?)<\/ul>/g;
-      
-      let lineMatch;
-      while ((lineMatch = linePattern.exec(html)) !== null) {
-        const lineName = lineMatch[1].trim();
-        const lineHtml = lineMatch[2];
+    const $ = cheerio.load(data)
+    
+    // 解析影片列表
+    $('.stui-vodlist__box').each((_, element) => {
+        const href = $(element).find('a').attr('href')
+        const title = $(element).find('.pic-text').text() || $(element).find('img').attr('alt')
+        const cover = $(element).find('img').attr('data-original') || $(element).find('img').attr('src')
+        const subTitle = $(element).find('.pic-text').text()
         
-        // 解析该线路的集数
-        const episodes = [];
-        const epPattern = /<a[^>]*href="\/play\/(\d+)-(\d+)-(\d+)\.html"[^>]*>([^<]+)<\/a>/g;
-        
-        let epMatch;
-        while ((epMatch = epPattern.exec(lineHtml)) !== null) {
-          episodes.push({
-            id: epMatch[1],
-            sid: parseInt(epMatch[2]),
-            nid: parseInt(epMatch[3]),
-            name: epMatch[4].trim(),
-            url: `${this.config.baseUrl}/play/${epMatch[1]}-${epMatch[2]}-${epMatch[3]}.html`
-          });
+        if (href && title) {
+            const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+            cards.push({
+                vod_id: href,
+                vod_name: title.trim(),
+                vod_pic: cover,
+                vod_remarks: subTitle,
+                url: fullUrl,
+                ext: {
+                    url: fullUrl,
+                },
+            })
         }
+    })
+    
+    return jsonify({
+        list: cards,
+    })
+}
+
+async function getTracks(ext) {
+    ext = argsify(ext)
+    let tracks = []
+    let url = ext.url
+    
+    const { data } = await $fetch.get(url, {
+        headers: {
+            'User-Agent': UA,
+        },
+    })
+    
+    const $ = cheerio.load(data)
+    
+    // 解析播放线路和集数
+    // LIBVIO 播放线路结构: 每个线路有一个h3标题和对应的ul列表
+    const playLines = []
+    
+    // 查找所有播放线路
+    $('.stui-play__list').each((_, element) => {
+        // 获取线路名称（在h3标签中）
+        const lineName = $(element).prev('h3').text().trim() || $(element).prev().find('h3').text().trim()
+        
+        const episodes = []
+        $(element).find('li a').each((_, e) => {
+            const name = $(e).text().trim()
+            const href = $(e).attr('href')
+            if (href && name) {
+                episodes.push({
+                    name: name,
+                    pan: '',
+                    ext: {
+                        url: href.startsWith('http') ? href : appConfig.site + href,
+                    },
+                })
+            }
+        })
         
         if (episodes.length > 0) {
-          lines.push({
-            name: lineName,
-            episodes: episodes
-          });
+            playLines.push({
+                title: lineName || '默认线路',
+                tracks: episodes
+            })
         }
-      }
-      
-      return {
-        id,
-        title,
-        rating,
-        description,
-        detailUrl,
-        lines
-      };
-      
-    } catch (error) {
-      console.error('获取详情失败:', error);
-      return null;
+    })
+    
+    // 如果没有找到，尝试其他选择器
+    if (playLines.length === 0) {
+        // 尝试查找所有包含 /play/ 链接的元素
+        $('a[href*="/play/"]').each((_, e) => {
+            const href = $(e).attr('href')
+            const name = $(e).text().trim()
+            
+            // 提取线路信息
+            const lineMatch = href.match(/\/play\/(\d+)-(\d+)-(\d+)\.html/)
+            if (lineMatch && name) {
+                const sid = lineMatch[2]
+                let lineName = '线路' + sid
+                if (sid === '1') lineName = 'BD5播放'
+                else if (sid === '2') lineName = 'BD播放'
+                
+                // 查找是否已有该线路
+                let existingLine = playLines.find(l => l.title === lineName)
+                if (!existingLine) {
+                    existingLine = { title: lineName, tracks: [] }
+                    playLines.push(existingLine)
+                }
+                
+                existingLine.tracks.push({
+                    name: name,
+                    pan: '',
+                    ext: {
+                        url: href.startsWith('http') ? href : appConfig.site + href,
+                    },
+                })
+            }
+        })
     }
-  },
-  
-  // 搜索影片
-  async search(keyword) {
-    const searchUrl = `${this.config.baseUrl}/search/-------------.html?wd=${encodeURIComponent(keyword)}`;
+    
+    return jsonify({
+        list: playLines,
+    })
+}
+
+async function getPlayinfo(ext) {
+    ext = argsify(ext)
+    const url = ext.url
+    
+    const { data } = await $fetch.get(url, {
+        headers: {
+            'User-Agent': UA,
+        },
+    })
+    
+    let playurl = ''
     
     try {
-      const response = await fetch(searchUrl, {
-        headers: this.config.headers
-      });
-      
-      const html = await response.text();
-      
-      // 解析搜索结果
-      const results = [];
-      const pattern = /<a[^>]*href="\/detail\/(\d+)\.html"[^>]*>[\s\S]*?<span[^>]*class="pic-text"[^>]*>([^<]+)<\/span>/g;
-      
-      let match;
-      while ((match = pattern.exec(html)) !== null) {
-        results.push({
-          id: match[1],
-          title: match[2].trim(),
-          url: `${this.config.baseUrl}/detail/${match[1]}.html`
-        });
-      }
-      
-      return results;
-      
+        // LIBVIO 播放器配置在 player_aaaa 变量中
+        const match = data.match(/var\s+player_\w+\s*=\s*(\{[^}]+\})/)
+        if (match) {
+            const playerConfig = JSON.parse(match[1])
+            playurl = playerConfig.url
+            
+            $print('解析成功，视频URL: ' + playurl)
+        } else {
+            $print('未找到播放器配置')
+        }
     } catch (error) {
-      console.error('搜索失败:', error);
-      return [];
+        $print('解析失败: ' + error)
     }
-  }
-};
+    
+    return jsonify({
+        urls: [playurl],
+        headers: [
+            {
+                'User-Agent': UA,
+                'Referer': appConfig.site
+            }
+        ]
+    })
+}
 
-// ============================================
-// XPTV 标准配置格式 (JSON)
-// ============================================
-
-const XPTV_JSON_CONFIG = {
-  "name": "LIBVIO",
-  "version": "1.0",
-  "description": "LIBVIO视频源 - MP4直链播放",
-  "baseUrl": "http://www.libvio.site",
-  
-  "requestHeaders": {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Referer": "http://www.libvio.site"
-  },
-  
-  // 播放解析配置 - 关键配置
-  "playParser": {
-    "urlPattern": "${baseUrl}/play/${id}-${sid}-${nid}.html",
-    "videoExtractor": {
-      "type": "regex",
-      "pattern": "var\\s+player_\\w+\\s*=\\s*(\\{[^}]+\\})",
-      "jsonPath": "url"
+async function search(ext) {
+    ext = argsify(ext)
+    let cards = []
+    let text = encodeURIComponent(ext.text)
+    let page = ext.page || 1
+    let url = `${appConfig.site}/search/-------------.html?wd=${text}`
+    
+    if (page > 1) {
+        url += `&page=${page}`
     }
-  },
-  
-  // 分类
-  "categories": [
-    {"name": "电影", "url": "http://www.libvio.site/type/1.html"},
-    {"name": "剧集", "url": "http://www.libvio.site/type/2.html"},
-    {"name": "动漫", "url": "http://www.libvio.site/type/4.html"},
-    {"name": "日韩剧", "url": "http://www.libvio.site/type/15.html"},
-    {"name": "欧美剧", "url": "http://www.libvio.site/type/16.html"}
-  ],
-  
-  // 搜索配置
-  "search": {
-    "url": "http://www.libvio.site/search/-------------.html?wd=${keyword}"
-  },
-  
-  // 列表页解析
-  "listParser": {
-    "itemSelector": ".stui-vodlist__box",
-    "titleSelector": ".pic-text",
-    "linkSelector": "a",
-    "idRegex": "/detail/(\\d+)\\.html"
-  },
-  
-  // 详情页解析
-  "detailParser": {
-    "titleSelector": "h1",
-    "ratingSelector": ".douban",
-    "playlineSelector": ".stui-play__list",
-    "episodeSelector": "li a",
-    "episodeUrlRegex": "/play/(\\d+)-(\\d+)-(\\d+)\\.html"
-  }
-};
+    
+    const { data } = await $fetch.get(url, {
+        headers: {
+            'User-Agent': UA,
+        },
+    })
+    
+    const $ = cheerio.load(data)
+    
+    $('.stui-vodlist__box').each((_, element) => {
+        const href = $(element).find('a').attr('href')
+        const title = $(element).find('.pic-text').text() || $(element).find('img').attr('alt')
+        const cover = $(element).find('img').attr('data-original') || $(element).find('img').attr('src')
+        const subTitle = $(element).find('.pic-text').text()
+        
+        if (href && title) {
+            const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+            cards.push({
+                vod_id: href,
+                vod_name: title.trim(),
+                vod_pic: cover,
+                vod_remarks: subTitle,
+                url: fullUrl,
+                ext: {
+                    url: fullUrl,
+                },
+            })
+        }
+    })
+    
+    return jsonify({
+        list: cards,
+    })
+}
 
 // 导出
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { libvioExt, XPTV_JSON_CONFIG };
+    module.exports = { getConfig, getTabs, getCards, getTracks, getPlayinfo, search }
 }
-
-// ============================================
-// 使用示例
-// ============================================
-
-async function example() {
-  // 示例1: 获取影片详情
-  const detail = await libvioExt.getDetail('714893168');
-  console.log('影片详情:', detail);
-  
-  // 示例2: 获取播放URL (使用BD5播放线路)
-  const playInfo = await libvioExt.getPlayUrl('714893168', 1, 1);
-  console.log('播放信息:', playInfo);
-  
-  // 示例3: 搜索
-  const results = await libvioExt.search('骑士');
-  console.log('搜索结果:', results);
-}
-
-// 如果支持 top level await，可以直接调用示例
-// example();
