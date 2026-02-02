@@ -1,54 +1,126 @@
-自定义配置按照你的实际情况填入下列信息{"sniffer":"http://192.168.50.9:18000"}
+const cheerio = createCheerio()
 
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+const headers = {
+  'User-Agent': UA,
+  'Referer': 'https://www.cyfz.vip/'
+}
 
-let $config = argsify($config_str)
+// 嗅探器地址（改成你的实际地址）
+const SNIFFER_URL = 'http://192.168.50.9:18000/getplayurl'
 
-//方法一，不需要cookie等各种参数直接用get即可
-async function getPlayinfo(ext) {
-    ext = argsify(ext)
-    let url = ext.url
+let appConfig = {
+  ver: 1,
+  title: '次元方舟',
+  site: 'https://www.cyfz.vip',
+  tabs: [
+    { name: '日番', ext: { url: 'https://www.cyfz.vip/vodshow/20/page/{page}.html' } },
+    { name: '国漫', ext: { url: 'https://www.cyfz.vip/vodshow/21/page/{page}.html' } },
+    { name: '欧美', ext: { url: 'https://www.cyfz.vip/vodshow/22/page/{page}.html' } },
+    { name: '剧场版', ext: { url: 'https://www.cyfz.vip/vodshow/23/page/{page}.html' } }
+  ]
+}
 
-    const { data } = await $fetch.get(`${$config.sniffer}/getplayurl?url=${url}`, {
-        header
+async function getConfig() {
+  return jsonify(appConfig)
+}
+
+async function getCards(ext) {
+  ext = argsify(ext)
+  let cards = []
+  let url = ext.url.replace('{page}', ext.page || 1)
+
+  const { data } = await $fetch.get(url, { headers })
+  const $ = cheerio.load(data)
+
+  $('.public-list-box').each((i, el) => {
+    const $link = $(el).find('.public-list-priv a')
+    const href = $link.attr('href')
+    
+    if (href) {
+      cards.push({
+        vod_id: href.match(/\d+/)[0],
+        vod_name: $link.attr('title'),
+        vod_pic: $link.attr('data-src'),
+        vod_remarks: $link.find('.public-list-priv-label').text().trim(),
+        ext: { url: appConfig.site + href }
+      })
+    }
+  })
+
+  return jsonify({ list: cards })
+}
+
+async function getTracks(ext) {
+  ext = argsify(ext)
+  let allTracks = []
+
+  const { data } = await $fetch.get(ext.url, { headers })
+  const $ = cheerio.load(data)
+
+  let titles = []
+  $('.slide-block-title').each((i, el) => {
+    titles.push($(el).text().trim())
+  })
+
+  $('.anthology-list-play').each((i, el) => {
+    let tracks = []
+    $(el).find('li a').each((j, link) => {
+      tracks.push({
+        name: $(link).text().trim(),
+        pan: '',
+        ext: { url: appConfig.site + $(link).attr('href') }
+      })
     })
-        return jsonify({ urls: [argsify(data).result.first.url], headers: [argsify(data).result.first.headers] })
+    
+    if (tracks.length > 0) {
+      allTracks.push({ title: titles[i] || `播放列表${i + 1}`, tracks })
+    }
+  })
 
+  return jsonify({ list: allTracks })
 }
-
-
-//方法二，自定义参数
-
-{
-  "url": 目标链接,
-  "first": 0,//检测都一个链接就直接返回，否则继续抓候选链接   1=开，0=关，默认开
-  "limit":0,//候选的限制条数，默认5
-  "triggerplay": 0,//是否触发播放，默认关闭
-  "speed":0,//是否极速模式，屏蔽图片/字体/CSS，默认打开
-  "cookie": "xxx",
-  "ua" :[
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-]
-}
-
 
 async function getPlayinfo(ext) {
-    ext = argsify(ext)
-    let url = ext.url
-
-    const {data}= await $fetch.post(`${$config.sniffer}/getplayurl`, JSON.stringify({
-        "url": url,
-        "ua": [
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-        ]}, {
-        'User-Agent': UA,
-        'Content-Type': 'application/json',
-    }))
-
-    return jsonify({ urls: [argsify(data).result.first.url], headers: [argsify(data).result.first.headers] })
-
+  ext = argsify(ext)
+  
+  try {
+    // 使用嗅探器获取视频地址
+    const snifferUrl = `${SNIFFER_URL}?url=${encodeURIComponent(ext.url)}`
+    const { data } = await $fetch.get(snifferUrl)
+    
+    if (data.url) {
+      return jsonify({ urls: [data.url] })
+    }
+    
+    return jsonify({ urls: [] })
+  } catch (error) {
+    return jsonify({ urls: [] })
+  }
 }
 
+async function search(ext) {
+  ext = argsify(ext)
+  
+  if ((ext.page || 1) > 1) {
+    return jsonify({ list: [] })
+  }
 
+  let cards = []
+  const searchUrl = `${appConfig.site}/vodsearch/${encodeURIComponent(ext.text)}`
+  const { data } = await $fetch.get(searchUrl, { headers })
+  const $ = cheerio.load(data)
 
+  $('.public-list-box').each((i, el) => {
+    const $link = $(el).find('a.public-list-exp')
+    cards.push({
+      vod_id: $link.attr('href'),
+      vod_name: $(el).find('.thumb-txt a').text(),
+      vod_pic: $(el).find('img').attr('data-src'),
+      vod_remarks: $(el).find('.public-list-priv-label').text(),
+      ext: { url: appConfig.site + $link.attr('href') }
+    })
+  })
 
-
+  return jsonify({ list: cards })
+}
