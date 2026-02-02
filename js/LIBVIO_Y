@@ -1,49 +1,57 @@
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
 const cheerio = createCheerio()
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-const headers = {
-  'User-Agent': UA,
-  'Referer': 'https://www.cyfz.vip/'
-}
+let $config = argsify($config_str)
 
-// 嗅探器地址（改成你的实际地址）
-const SNIFFER_URL = 'http://192.168.50.9:18000/getplayurl'
-
-let appConfig = {
+const appConfig = {
   ver: 1,
-  title: '次元方舟',
-  site: 'https://www.cyfz.vip',
+  title: 'libvio',
+  site: 'https://www.libvio.site',
   tabs: [
-    { name: '日番', ext: { url: 'https://www.cyfz.vip/vodshow/20/page/{page}.html' } },
-    { name: '国漫', ext: { url: 'https://www.cyfz.vip/vodshow/21/page/{page}.html' } },
-    { name: '欧美', ext: { url: 'https://www.cyfz.vip/vodshow/22/page/{page}.html' } },
-    { name: '剧场版', ext: { url: 'https://www.cyfz.vip/vodshow/23/page/{page}.html' } }
+    { name: '电影', ui: 1, ext: { id: '/show/1--------1---.html' } },
+    { name: '电视剧', ui: 1, ext: { id: '/show/2--------1---.html' } },
+    { name: '动漫', ui: 1, ext: { id: '/show/3--------1---.html' } },
+    { name: '日韩', ui: 1, ext: { id: '/show/4--------1---.html' } },
+    { name: '纪录片', ui: 1, ext: { id: '/show/5--------1---.html' } },
+    // 如果需要更多分类，可以继续添加
   ]
 }
 
 async function getConfig() {
-  return jsonify(appConfig)
+  return jsonify({ ...appConfig })
 }
 
 async function getCards(ext) {
   ext = argsify(ext)
   let cards = []
-  let url = ext.url.replace('{page}', ext.page || 1)
+  let page = ext.page || 1
+  let id = ext.id || '/'
 
-  const { data } = await $fetch.get(url, { headers })
+  const url = appConfig.site + id.replace('---', page)
+
+  const { data } = await $fetch.get(url, {
+    headers: { 'User-Agent': UA }
+  })
+
   const $ = cheerio.load(data)
 
-  $('.public-list-box').each((i, el) => {
-    const $link = $(el).find('.public-list-priv a')
-    const href = $link.attr('href')
-    
-    if (href) {
+  // libvio 常见的列表项选择器（2025-2026常见结构）
+  const items = $('.module-item, .stui-vodlist__thumb')
+  items.each((_, e) => {
+    const a = $(e).find('a')
+    const href = a.attr('href')
+    const title = a.attr('title') || $(e).find('.module-item-title').text().trim()
+    const cover = $(e).find('img').attr('data-src') || $(e).find('img').attr('src')
+    const remarks = $(e).find('.module-item-note, .pic-text').text().trim()
+
+    if (href && title) {
       cards.push({
-        vod_id: href.match(/\d+/)[0],
-        vod_name: $link.attr('title'),
-        vod_pic: $link.attr('data-src'),
-        vod_remarks: $link.find('.public-list-priv-label').text().trim(),
-        ext: { url: appConfig.site + href }
+        vod_id: href,
+        vod_name: title,
+        vod_pic: cover.startsWith('http') ? cover : 'https:' + cover,
+        vod_remarks: remarks || '',
+        ext: { url: href }
       })
     }
   })
@@ -53,73 +61,148 @@ async function getCards(ext) {
 
 async function getTracks(ext) {
   ext = argsify(ext)
-  let allTracks = []
+  let tracks = []
+  const url = appConfig.site + ext.url
 
-  const { data } = await $fetch.get(ext.url, { headers })
+  const { data } = await $fetch.get(url, {
+    headers: { 'User-Agent': UA }
+  })
   const $ = cheerio.load(data)
 
-  let titles = []
-  $('.slide-block-title').each((i, el) => {
-    titles.push($(el).text().trim())
-  })
+  // libvio 播放列表通常有多线路
+  const playlists = $('.module-play-list, .play_list_box')
 
-  $('.anthology-list-play').each((i, el) => {
-    let tracks = []
-    $(el).find('li a').each((j, link) => {
-      tracks.push({
-        name: $(link).text().trim(),
-        pan: '',
-        ext: { url: appConfig.site + $(link).attr('href') }
-      })
+  playlists.each((i, list) => {
+    const title = $(list).prev().text().trim() || `线路${i + 1}`
+    let lineTracks = []
+
+    $(list).find('a').each((_, a) => {
+      const href = $(a).attr('href')
+      const name = $(a).text().trim()
+      if (href && name) {
+        lineTracks.push({
+          name: name,
+          pan: '',
+          ext: { url: href }
+        })
+      }
     })
-    
-    if (tracks.length > 0) {
-      allTracks.push({ title: titles[i] || `播放列表${i + 1}`, tracks })
+
+    if (lineTracks.length > 0) {
+      tracks.push({
+        title: title,
+        tracks: lineTracks
+      })
     }
   })
 
-  return jsonify({ list: allTracks })
+  // 如果没有多线路分组，就直接返回所有
+  if (tracks.length === 0) {
+    const singleTracks = []
+    $('.module-play-list a, .play_list a').each((_, a) => {
+      const href = $(a).attr('href')
+      const name = $(a).text().trim()
+      if (href && name) {
+        singleTracks.push({
+          name: name,
+          pan: '',
+          ext: { url: href }
+        })
+      }
+    })
+    if (singleTracks.length > 0) {
+      tracks.push({
+        title: '默认线路',
+        tracks: singleTracks
+      })
+    }
+  }
+
+  return jsonify({ list: tracks })
 }
 
 async function getPlayinfo(ext) {
   ext = argsify(ext)
-  
-  try {
-    // 使用嗅探器获取视频地址
-    const snifferUrl = `${SNIFFER_URL}?url=${encodeURIComponent(ext.url)}`
-    const { data } = await $fetch.get(snifferUrl)
-    
-    if (data.url) {
-      return jsonify({ urls: [data.url] })
-    }
-    
-    return jsonify({ urls: [] })
-  } catch (error) {
-    return jsonify({ urls: [] })
+  const url = appConfig.site + ext.url
+
+  const { data: html } = await $fetch.get(url, {
+    headers: { 'User-Agent': UA }
+  })
+
+  let playUrl = null
+
+  // 方式1：最常见 — var player_data = {...}
+  let playerMatch = html.match(/var\s+player_data\s*=\s*(\{.+?\});/s)
+  if (playerMatch && playerMatch[1]) {
+    try {
+      const player = JSON.parse(playerMatch[1])
+      playUrl = player.url || player.playurl || player['video-url']
+    } catch (e) {}
   }
+
+  // 方式2：var playinfo = '...' 或 mac_url
+  if (!playUrl) {
+    let infoMatch = html.match(/(?:var\s+playinfo|mac_url)\s*=\s*['"](.+?)['"]/s)
+    if (infoMatch && infoMatch[1]) {
+      try {
+        const info = JSON.parse(infoMatch[1])
+        playUrl = info.url || info.playurl
+      } catch (e) {}
+    }
+  }
+
+  // 方式3：直接搜 .m3u8 链接（兜底）
+  if (!playUrl) {
+    const m3u8Match = html.match(/https?:\/\/[^'"\s)]+\.m3u8[^'"\s)]*/i)
+    if (m3u8Match) {
+      playUrl = m3u8Match[0]
+    }
+  }
+
+  if (playUrl) {
+    if (!playUrl.startsWith('http')) {
+      playUrl = 'https:' + playUrl
+    }
+    return jsonify({
+      urls: [playUrl],
+      parse: 0   // 0=直链，1=需二次解析
+    })
+  }
+
+  return jsonify({
+    urls: [],
+    error: '未找到播放地址，网站结构可能已更新，请提供播放页源码检查'
+  })
 }
 
 async function search(ext) {
   ext = argsify(ext)
-  
-  if ((ext.page || 1) > 1) {
-    return jsonify({ list: [] })
-  }
-
   let cards = []
-  const searchUrl = `${appConfig.site}/vodsearch/${encodeURIComponent(ext.text)}`
-  const { data } = await $fetch.get(searchUrl, { headers })
+  let text = encodeURIComponent(ext.text)
+  let page = ext.page || 1
+
+  const url = `${appConfig.site}/search/${text}----------${page}---.html`
+
+  const { data } = await $fetch.get(url, {
+    headers: { 'User-Agent': UA }
+  })
   const $ = cheerio.load(data)
 
-  $('.public-list-box').each((i, el) => {
-    const $link = $(el).find('a.public-list-exp')
-    cards.push({
-      vod_id: $link.attr('href'),
-      vod_name: $(el).find('.thumb-txt a').text(),
-      vod_pic: $(el).find('img').attr('data-src'),
-      vod_remarks: $(el).find('.public-list-priv-label').text(),
-      ext: { url: appConfig.site + $link.attr('href') }
-    })
+  $('.module-item').each((_, e) => {
+    const href = $(e).find('a').attr('href')
+    const title = $(e).find('.module-item-title').text().trim()
+    const cover = $(e).find('img').attr('data-src') || $(e).find('img').attr('src')
+    const remarks = $(e).find('.module-item-note').text().trim()
+
+    if (href && title) {
+      cards.push({
+        vod_id: href,
+        vod_name: title,
+        vod_pic: cover.startsWith('http') ? cover : 'https:' + cover,
+        vod_remarks: remarks || '',
+        ext: { url: href }
+      })
+    }
   })
 
   return jsonify({ list: cards })
