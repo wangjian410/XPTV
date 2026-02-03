@@ -4,8 +4,8 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 let appConfig = {
     ver: 1,
-    title: 'LIBVIO',
-    site: 'http://www.libvio.site',
+    title: 'IFN',
+    site: 'https://cn.ifn.watch',
 }
 
 async function getConfig() {
@@ -19,31 +19,37 @@ async function getTabs() {
         {
             name: '电影',
             ext: {
-                url: appConfig.site + '/type/1.html',
+                url: appConfig.site + '/category/3',
             },
         },
         {
             name: '剧集',
             ext: {
-                url: appConfig.site + '/type/2.html',
+                url: appConfig.site + '/category/4',
+            },
+        },
+        {
+            name: '综艺',
+            ext: {
+                url: appConfig.site + '/category/5',
             },
         },
         {
             name: '动漫',
             ext: {
-                url: appConfig.site + '/type/4.html',
+                url: appConfig.site + '/category/6',
             },
         },
         {
-            name: '日韩剧',
+            name: '纪录片',
             ext: {
-                url: appConfig.site + '/type/15.html',
+                url: appConfig.site + '/category/7',
             },
         },
         {
-            name: '欧美剧',
+            name: '4K',
             ext: {
-                url: appConfig.site + '/type/16.html',
+                url: appConfig.site + '/category/40',
             },
         },
     ]
@@ -56,7 +62,8 @@ async function getCards(ext) {
     let { page = 1, url } = ext
 
     if (page > 1 && url) {
-        url = url.replace('.html', `/page/${page}.html`)
+        // IFN 的分页可能是 ?page= 或其他格式，需要实际测试
+        url = url + `?page=${page}`
     }
 
     try {
@@ -68,38 +75,95 @@ async function getCards(ext) {
 
         const $ = cheerio.load(data)
 
-        // 修正后的选择器 - 从影片卡片中提取正确信息
-        $('.stui-vodlist__box').each((_, element) => {
-            // 获取链接和标题（标题在 a 标签的 title 属性中）
-            const linkElem = $(element).find('.stui-vodlist__thumb')
+        // 方法1：解析标准卡片结构
+        $('a[href^="/detail/"]').each((_, element) => {
+            const linkElem = $(element)
             const href = linkElem.attr('href')
-            const title = linkElem.attr('title') // 正确的标题位置
             
-            // 获取封面（在 data-original 属性中）
-            const cover = linkElem.attr('data-original')
+            // 获取标题 - 尝试多种方式
+            let title = ''
+            const h3Elem = linkElem.find('h3')
+            if (h3Elem.length > 0) {
+                title = h3Elem.text().trim()
+            }
             
-            // 获取状态/评分信息（pic-text 是状态，pic-tag 是评分）
-            const status = linkElem.find('.pic-text').text().trim() // 如"已完结"
-            const rating = linkElem.find('.pic-tag').text().trim() // 如"8.6"
+            // 如果找不到标题，尝试从 img alt 获取
+            if (!title) {
+                const img = linkElem.find('img')
+                title = img.attr('alt') || img.attr('title') || ''
+            }
             
-            // 组合备注信息
-            const remarks = rating ? `${rating}分 | ${status}` : status
+            // 获取封面图片
+            let cover = ''
+            const img = linkElem.find('img')
+            if (img.length > 0) {
+                cover = img.attr('data-src') || img.attr('src') || ''
+                // 补全域名
+                if (cover && cover.startsWith('/')) {
+                    cover = appConfig.site + cover
+                }
+            }
+            
+            // 获取评分
+            let rating = ''
+            // 尝试从包含数字+分的文本中提取
+            const text = linkElem.text()
+            const ratingMatch = text.match(/(\d+\.?\d*)分/)
+            if (ratingMatch) {
+                rating = ratingMatch[1] + '分'
+            }
 
             if (href && title) {
                 const fullUrl = href.startsWith('http') ? href : appConfig.site + href
                 cards.push({
                     vod_id: href,
-                    vod_name: title.trim(),
+                    vod_name: title,
                     vod_pic: cover,
-                    vod_remarks: remarks,
+                    vod_remarks: rating,
                     ext: {
                         url: fullUrl,
                     },
                 })
             }
         })
+
+        // 方法2：如果方法1没找到，尝试从 JSON 数据中提取
+        if (cards.length === 0) {
+            const jsonMatch = data.match(/window\.__INITIAL_STATE__\s*=\s*(\{[^;]+\});/)
+            if (jsonMatch) {
+                try {
+                    const initialState = JSON.parse(jsonMatch[1])
+                    if (initialState.list && initialState.list.length > 0) {
+                        initialState.list.forEach(item => {
+                            cards.push({
+                                vod_id: item.id || item.mediaId,
+                                vod_name: item.title || item.name,
+                                vod_pic: item.coverImgUrl || item.cover,
+                                vod_remarks: item.score || item.updateStatus,
+                                ext: {
+                                    url: appConfig.site + '/detail/' + (item.mediaId || item.id),
+                                },
+                            })
+                        })
+                    }
+                } catch (e) {
+                    $print('解析 INITIAL_STATE 失败: ' + e)
+                }
+            }
+        }
+
+        // 去重处理
+        const seen = new Set()
+        cards = cards.filter(card => {
+            if (seen.has(card.vod_id)) {
+                return false
+            }
+            seen.add(card.vod_id)
+            return true
+        })
+
     } catch (error) {
-        $print(error)
+        $print('Error in getCards: ' + error)
     }
 
     return jsonify({
@@ -120,119 +184,107 @@ async function getTracks(ext) {
         })
 
         const $ = cheerio.load(data)
-        
-        // 修正后的播放线路解析
-        // LIBVIO 的播放结构：每个线路包含 h3 标题和 stui-play__list 列表
         const playGroups = []
         
-        // 方法1：查找所有播放线路区块
-        $('.stui-pannel__head').each((_, element) => {
-            const lineName = $(element).find('h3').text().trim()
-            const playList = $(element).next('.stui-play__list')
-            
-            if (playList.length > 0) {
-                const episodes = []
-                playList.find('li a').each((_, e) => {
-                    const name = $(e).text().trim()
-                    const href = $(e).attr('href')
-                    if (href && name) {
-                        const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+        // 方法1：从 detailData JSON 中提取剧集信息
+        const detailDataMatch = data.match(/"detailData":(\{[^}]+\})/)
+        if (detailDataMatch) {
+            try {
+                const detailData = JSON.parse(detailDataMatch[1])
+                if (detailData.episodes && detailData.episodes.length > 0) {
+                    const episodes = []
+                    detailData.episodes.forEach((ep, index) => {
                         episodes.push({
-                            name: name,
+                            name: ep.title || `第${index + 1}集`,
                             pan: '',
                             ext: {
-                                url: fullUrl,
+                                url: url, // 使用详情页URL，播放时在getPlayinfo中提取
+                                episodeId: ep.id || ep.episodeId,
+                                episodeIndex: index,
                             },
                         })
-                    }
-                })
-                
-                if (episodes.length > 0) {
-                    playGroups.push({
-                        title: lineName || '默认线路',
-                        tracks: episodes
                     })
+                    
+                    if (episodes.length > 0) {
+                        playGroups.push({
+                            title: '默认线路',
+                            tracks: episodes
+                        })
+                    }
                 }
+            } catch (e) {
+                $print('解析 detailData 失败: ' + e)
             }
-        })
-        
-        // 方法2：如果没找到，尝试直接查找 stui-play__list
-        if (playGroups.length === 0) {
-            $('.stui-play__list').each((_, element) => {
-                // 获取线路名称（在h3标签中）
-                const lineName = $(element).prev('h3').text().trim() || 
-                                $(element).parent().prev().find('h3').text().trim() ||
-                                $(element).closest('.stui-pannel__bd').prev().find('h3').text().trim()
-                
-                const episodes = []
-                $(element).find('li a').each((_, e) => {
-                    const name = $(e).text().trim()
-                    const href = $(e).attr('href')
-                    if (href && name) {
-                        const fullUrl = href.startsWith('http') ? href : appConfig.site + href
-                        episodes.push({
-                            name: name,
-                            pan: '',
-                            ext: {
-                                url: fullUrl,
-                            },
-                        })
-                    }
-                })
-                
-                if (episodes.length > 0) {
-                    playGroups.push({
-                        title: lineName || '默认线路',
-                        tracks: episodes
-                    })
-                }
-            })
         }
         
-        // 方法3：最后尝试 - 查找所有播放链接
+        // 方法2：从 JSON-LD 中提取剧集信息
         if (playGroups.length === 0) {
-            const lineMap = new Map()
-            
-            $('a[href*="/play/"]').each((_, e) => {
-                const href = $(e).attr('href')
-                const name = $(e).text().trim()
-                
-                const match = href.match(/\/play\/(\d+)-(\d+)-(\d+)\.html/)
-                if (match && name) {
-                    const sid = match[2]
-                    let lineName = '线路' + sid
-                    if (sid === '1') lineName = 'BD5播放'
-                    else if (sid === '2') lineName = 'BD播放'
-                    
-                    if (!lineMap.has(lineName)) {
-                        lineMap.set(lineName, [])
+            const jsonLdMatch = data.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)
+            if (jsonLdMatch) {
+                try {
+                    const jsonLd = JSON.parse(jsonLdMatch[1])
+                    if (jsonLd.episode && jsonLd.episode.length > 0) {
+                        const episodes = []
+                        jsonLd.episode.forEach((ep, index) => {
+                            episodes.push({
+                                name: ep.name || `第${ep.episodeNumber || index + 1}集`,
+                                pan: '',
+                                ext: {
+                                    url: url,
+                                    episodeIndex: index,
+                                },
+                            })
+                        })
+                        
+                        if (episodes.length > 0) {
+                            playGroups.push({
+                                title: '默认线路',
+                                tracks: episodes
+                            })
+                        }
                     }
-                    
-                    const fullUrl = href.startsWith('http') ? href : appConfig.site + href
-                    lineMap.get(lineName).push({
-                        name: name,
+                } catch (e) {
+                    $print('解析 JSON-LD 失败: ' + e)
+                }
+            }
+        }
+        
+        // 方法3：从页面按钮中提取剧集
+        if (playGroups.length === 0) {
+            const episodes = []
+            let index = 0
+            
+            // 查找所有包含集数文本的按钮
+            $('button').each((_, element) => {
+                const btn = $(element)
+                const title = btn.attr('title')
+                const text = btn.text().trim()
+                
+                // 匹配集数格式：01, 02, 第1集, 第01集 等
+                if (title && /^\d+$|^第\d+集$/.test(title)) {
+                    episodes.push({
+                        name: title,
                         pan: '',
                         ext: {
-                            url: fullUrl,
+                            url: url,
+                            episodeIndex: index++,
                         },
                     })
                 }
             })
             
-            for (const [name, episodes] of lineMap) {
-                if (episodes.length > 0) {
-                    playGroups.push({
-                        title: name,
-                        tracks: episodes
-                    })
-                }
+            if (episodes.length > 0) {
+                playGroups.push({
+                    title: '默认线路',
+                    tracks: episodes
+                })
             }
         }
         
         tracks = playGroups
         
     } catch (error) {
-        $print(error)
+        $print('Error in getTracks: ' + error)
     }
 
     return jsonify({
@@ -243,54 +295,139 @@ async function getTracks(ext) {
 async function getPlayinfo(ext) {
     ext = argsify(ext)
     const url = ext.url
+    const episodeId = ext.episodeId || ''
+    const episodeIndex = ext.episodeIndex || 0
     let playurl = ''
 
     try {
-        const { data } = await $fetch.get(url, {
-            headers: {
-                'User-Agent': UA,
-            },
-        })
-
-        // 尝试多种方式提取视频URL
-        
-        // 方法1：从 player_aaaa 变量中提取
-        const match = data.match(/var\s+player_\w+\s*=\s*(\{[^}]+\})/)
-        if (match) {
+        // 方法0：如果有 episodeId，尝试直接构造 API 请求获取播放地址
+        if (episodeId) {
             try {
-                const playerConfig = JSON.parse(match[1])
-                playurl = playerConfig.url
-                $print('✓ 从 player_aaaa 提取成功: ' + playurl)
+                // 尝试多种可能的 API 格式
+                const apiUrls = [
+                    `${appConfig.site}/api/play/${episodeId}`,
+                    `${appConfig.site}/api/video/${episodeId}`,
+                    `${appConfig.site}/play/${episodeId}`,
+                ]
+                
+                for (const apiUrl of apiUrls) {
+                    try {
+                        const apiData = await $fetch.get(apiUrl, {
+                            headers: {
+                                'User-Agent': UA,
+                                'Referer': appConfig.site,
+                            },
+                        })
+                        
+                        // 解析 API 返回的 JSON
+                        if (apiData.data) {
+                            const apiJson = JSON.parse(apiData.data)
+                            if (apiJson.url || apiJson.play_url || apiJson.video_url) {
+                                playurl = apiJson.url || apiJson.play_url || apiJson.video_url
+                                $print('✓ 从 API 获取: ' + playurl)
+                                break
+                            }
+                        }
+                    } catch (e) {
+                        // 继续尝试下一个 API
+                    }
+                }
             } catch (e) {
-                $print('JSON解析失败: ' + e)
+                $print('API 请求失败: ' + e)
             }
         }
         
-        // 方法2：如果方法1失败，查找 m3u8 或 mp4 链接
+        // 如果 API 方法失败，继续从页面提取
         if (!playurl) {
-            const m3u8Match = data.match(/(https?:\/\/[^\s"\'<>]+\.m3u8[^\s"\'<>]*)/)
-            const mp4Match = data.match(/(https?:\/\/[^\s"\'<>]+\.mp4[^\s"\'<>]*)/)
+            const { data } = await $fetch.get(url, {
+                headers: {
+                    'User-Agent': UA,
+                },
+            })
+
+            // 方法1：从播放器变量中提取
+            const playerMatch = data.match(/var\s+player_\w+\s*=\s*(\{[^}]+\})/)
+            if (playerMatch) {
+                try {
+                    const playerConfig = JSON.parse(playerMatch[1])
+                    playurl = playerConfig.url || playerConfig.video || playerConfig.play_url || ''
+                    $print('✓ 从 player 变量提取: ' + playurl)
+                } catch (e) {
+                    $print('JSON解析失败: ' + e)
+                }
+            }
             
-            if (m3u8Match) {
-                playurl = m3u8Match[1]
-                $print('✓ 从 m3u8 提取成功: ' + playurl)
-            } else if (mp4Match) {
-                playurl = mp4Match[1]
-                $print('✓ 从 mp4 提取成功: ' + playurl)
+            // 方法2：查找 m3u8 链接
+            if (!playurl) {
+                const m3u8Match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
+                if (m3u8Match) {
+                    playurl = m3u8Match[1]
+                    $print('✓ 从 m3u8 提取: ' + playurl)
+                }
+            }
+            
+            // 方法3：查找 mp4 链接
+            if (!playurl) {
+                const mp4Match = data.match(/(https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*)/)
+                if (mp4Match) {
+                    playurl = mp4Match[1]
+                    $print('✓ 从 mp4 提取: ' + playurl)
+                }
+            }
+            
+            // 方法4：查找 iframe 视频源
+            if (!playurl) {
+                const iframeMatch = data.match(/<iframe[^>]+src=["']([^"']+)["']/)
+                if (iframeMatch) {
+                    playurl = iframeMatch[1]
+                    if (!playurl.startsWith('http')) {
+                        playurl = appConfig.site + playurl
+                    }
+                    $print('✓ 从 iframe 提取: ' + playurl)
+                }
+            }
+            
+            // 方法5：查找其他视频链接模式
+            if (!playurl) {
+                const videoMatch = data.match(/["'](https?:\/\/[^"']*(?:video|play|stream)[^"']*)["']/)
+                if (videoMatch) {
+                    playurl = videoMatch[1]
+                    $print('✓ 从视频链接提取: ' + playurl)
+                }
+            }
+            
+            // 方法6：从 detailData 中提取播放地址
+            if (!playurl) {
+                const detailDataMatch = data.match(/"detailData":(\{[^}]+\})/)
+                if (detailDataMatch) {
+                    try {
+                        const detailData = JSON.parse(detailDataMatch[1])
+                        // 如果有 episodes 数组，尝试获取对应集数的播放地址
+                        if (detailData.episodes && detailData.episodes[episodeIndex]) {
+                            const episode = detailData.episodes[episodeIndex]
+                            if (episode.url || episode.playUrl || episode.videoUrl) {
+                                playurl = episode.url || episode.playUrl || episode.videoUrl
+                                $print('✓ 从 detailData.episodes 提取: ' + playurl)
+                            }
+                        }
+                    } catch (e) {
+                        $print('解析 detailData 失败: ' + e)
+                    }
+                }
+            }
+            
+            // 方法7：查找 blob: 或 data: URL 之外的任何视频源
+            if (!playurl) {
+                const srcMatch = data.match(/src=["'](https?:\/\/[^"']+\.(?:m3u8|mp4|flv|ts)[^"']*)["']/)
+                if (srcMatch) {
+                    playurl = srcMatch[1]
+                    $print('✓ 从 src 属性提取: ' + playurl)
+                }
             }
         }
         
-        // 方法3：查找其他播放器变量
         if (!playurl) {
-            const urlMatch = data.match(/["\'](https?:\/\/[^"\']*v\.vbing\.me[^"\']*\.mp4)["\']/)
-            if (urlMatch) {
-                playurl = urlMatch[1]
-                $print('✓ 从 vbing 链接提取成功: ' + playurl)
-            }
-        }
-        
-        if (!playurl) {
-            $print('✗ 未能提取视频URL')
+            $print('✗ 未能提取视频URL，请检查网站是否需要特殊处理')
         }
         
     } catch (error) {
@@ -313,7 +450,7 @@ async function search(ext) {
     let cards = []
     let text = encodeURIComponent(ext.text)
     let page = ext.page || 1
-    let url = `${appConfig.site}/search/-------------.html?wd=${text}`
+    let url = `${appConfig.site}/search?keyword=${text}`
 
     if (page > 1) {
         url += `&page=${page}`
@@ -328,31 +465,63 @@ async function search(ext) {
 
         const $ = cheerio.load(data)
 
-        // 使用与 getCards 相同的选择器
-        $('.stui-vodlist__box').each((_, element) => {
-            const linkElem = $(element).find('.stui-vodlist__thumb')
+        // 使用与 getCards 相同的解析逻辑
+        $('a[href^="/detail/"]').each((_, element) => {
+            const linkElem = $(element)
             const href = linkElem.attr('href')
-            const title = linkElem.attr('title')
-            const cover = linkElem.attr('data-original')
-            const status = linkElem.find('.pic-text').text().trim()
-            const rating = linkElem.find('.pic-tag').text().trim()
-            const remarks = rating ? `${rating}分 | ${status}` : status
+            
+            let title = linkElem.find('h3, .title, [class*="title"]').text().trim()
+            if (!title) {
+                const img = linkElem.find('img')
+                title = img.attr('alt') || ''
+            }
+            
+            let cover = ''
+            const img = linkElem.find('img')
+            if (img.length > 0) {
+                cover = img.attr('data-src') || img.attr('src') || ''
+                if (cover && cover.startsWith('/api/image/')) {
+                    cover = appConfig.site + cover
+                }
+            }
+            
+            const ratingElem = linkElem.find('.rating, [class*="score"], [class*="rating"]')
+            let rating = ratingElem.text().trim()
+            
+            if (!rating) {
+                const text = linkElem.text()
+                const ratingMatch = text.match(/(\d+\.?\d*)分/)
+                if (ratingMatch) {
+                    rating = ratingMatch[1] + '分'
+                }
+            }
 
             if (href && title) {
                 const fullUrl = href.startsWith('http') ? href : appConfig.site + href
                 cards.push({
                     vod_id: href,
-                    vod_name: title.trim(),
+                    vod_name: title,
                     vod_pic: cover,
-                    vod_remarks: remarks,
+                    vod_remarks: rating,
                     ext: {
                         url: fullUrl,
                     },
                 })
             }
         })
+
+        // 去重
+        const seen = new Set()
+        cards = cards.filter(card => {
+            if (seen.has(card.vod_id)) {
+                return false
+            }
+            seen.add(card.vod_id)
+            return true
+        })
+
     } catch (error) {
-        $print(error)
+        $print('Error in search: ' + error)
     }
 
     return jsonify({
