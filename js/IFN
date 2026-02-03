@@ -298,86 +298,66 @@ async function getPlayinfo(ext) {
     const episodeId = ext.episodeId || ''
     const episodeIndex = ext.episodeIndex || 0
     let playurl = ''
+    
+    // IFN 登录凭证 - Bearer Token
+    const AUTH_TOKEN = 'Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Im80NmhCZ3hiSEgyQjZsenQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3J2Y3Jyd2R0Z2d2Ym9tdnp2cGV2LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiI2NTA0MThiZS1iZTc3LTRjYTItOWY3YS0xNWU3Y2YxNzRlNGUiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzcwMTA2NTMzLCJpYXQiOjE3NzAxMDI5MzMsImVtYWlsIjoidC5heS5haC5zLmNody5hcnoyNS43QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWwiOiJ0LmF5LmFoLnMuY2h3LmFyejI1LjdAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwic3ViIjoiNjUwNDE4YmUtYmU3Ny00Y2EyLTlmN2EtMTVlN2NmMTc0ZTRlIiwidWFfZGF0YTp7ImNmSW5mbyI6eyJhc09yZ2FuaXphdGlvbiI6IktpcmlubyBMTEMiLCJjaXR5IjoiSG9uZyBLb25nIiwiY29sbCI6IkhLRyIsImNvdW50cnkiOiJISyIsInJlZ2lvbiI6IlhYIiwicmVnaW9uQ29kZSI6IlhYIn0sImlzZnJvbSI6InVua25vd24iLCJyZWFsSXAiOiIyMTIuMTA3LjI5LjE5OCIsInJlZmVyIjoiZGlyZWN0IiwicmVmZXJlciI6ImRpcmVjdCIsInVybCI6InVua25vd24iLCJ1c2VyQWdlbnQiOiJNb3ppbGxhLzUuMCAoV2luZG93cyBOVCAxMC4wOyBXaW42NDsgeDY0KSBBcHBsZVdlYktpdC81MzcuMzYgKEtIVE1MLCBsaWtlIEdlY2tvKSBDaHJvbWUvMTM2LjAuMC4wIFNhZmFyaS81MzcuMzYifSwidXNlcm5hbWUiOiJza3RpIn0sInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiYWFsIjoiYWFsMSIsImFtciI6W3sibWV0aG9kIjoib3RwIiwidGltZXN0YW1wIjoxNzcwMTAyOTMzfV0sInNlc3Npb25faWQiOiIxMzIyMDI4Zi0wYzQwLTQ3MzktODczNy04YzJlOGQyNGZjYjgiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.eV94hY2VBkE0l2xPiMe_DdW6xBKBhblRXePx2YCqa8Q'
 
     try {
-        // 方法0：如果有 episodeId，尝试直接构造 API 请求获取播放地址
-        if (episodeId) {
+        // 首先获取详情页，提取必要的播放信息（带认证）
+        const { data } = await $fetch.get(url, {
+            headers: {
+                'User-Agent': UA,
+                'Authorization': AUTH_TOKEN,
+            },
+
+        // 方法1：从 detailData 中提取剧集的 playUrl 或 url
+        const detailDataMatch = data.match(/"detailData":(\{[^}]+\})/)
+        if (detailDataMatch) {
             try {
-                // 尝试多种可能的 API 格式
-                const apiUrls = [
-                    `${appConfig.site}/api/play/${episodeId}`,
-                    `${appConfig.site}/api/video/${episodeId}`,
-                    `${appConfig.site}/play/${episodeId}`,
-                ]
-                
-                for (const apiUrl of apiUrls) {
-                    try {
-                        const apiData = await $fetch.get(apiUrl, {
-                            headers: {
-                                'User-Agent': UA,
-                                'Referer': appConfig.site,
-                            },
-                        })
-                        
-                        // 解析 API 返回的 JSON
-                        if (apiData.data) {
-                            const apiJson = JSON.parse(apiData.data)
-                            if (apiJson.url || apiJson.play_url || apiJson.video_url) {
-                                playurl = apiJson.url || apiJson.play_url || apiJson.video_url
-                                $print('✓ 从 API 获取: ' + playurl)
-                                break
-                            }
-                        }
-                    } catch (e) {
-                        // 继续尝试下一个 API
+                const detailData = JSON.parse(detailDataMatch[1])
+                if (detailData.episodes && detailData.episodes[episodeIndex]) {
+                    const episode = detailData.episodes[episodeIndex]
+                    // IFN 使用 HLS 流媒体，playUrl 可能是 m3u8 或加密链接
+                    if (episode.playUrl || episode.url || episode.videoUrl) {
+                        playurl = episode.playUrl || episode.url || episode.videoUrl
+                        $print('✓ 从 detailData.episodes 提取: ' + playurl)
                     }
                 }
             } catch (e) {
-                $print('API 请求失败: ' + e)
+                $print('解析 detailData 失败: ' + e)
             }
         }
         
-        // 如果 API 方法失败，继续从页面提取
+        // 方法2：查找 /api/ts?url= 格式的播放链接
         if (!playurl) {
-            const { data } = await $fetch.get(url, {
-                headers: {
-                    'User-Agent': UA,
-                },
-            })
-
-            // 方法1：从播放器变量中提取
-            const playerMatch = data.match(/var\s+player_\w+\s*=\s*(\{[^}]+\})/)
-            if (playerMatch) {
-                try {
-                    const playerConfig = JSON.parse(playerMatch[1])
-                    playurl = playerConfig.url || playerConfig.video || playerConfig.play_url || ''
-                    $print('✓ 从 player 变量提取: ' + playurl)
-                } catch (e) {
-                    $print('JSON解析失败: ' + e)
-                }
+            const tsApiMatch = data.match(/["'](\/api\/ts\?url=[^"']+)["']/)
+            if (tsApiMatch) {
+                playurl = appConfig.site + tsApiMatch[1]
+                $print('✓ 从 /api/ts 提取: ' + playurl)
             }
-            
-            // 方法2：查找 m3u8 链接
-            if (!playurl) {
-                const m3u8Match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
-                if (m3u8Match) {
-                    playurl = m3u8Match[1]
-                    $print('✓ 从 m3u8 提取: ' + playurl)
-                }
+        }
+        
+        // 方法3：查找 m3u8 播放列表链接
+        if (!playurl) {
+            const m3u8Match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
+            if (m3u8Match) {
+                playurl = m3u8Match[1]
+                $print('✓ 从 m3u8 提取: ' + playurl)
             }
-            
-            // 方法3：查找 mp4 链接
-            if (!playurl) {
-                const mp4Match = data.match(/(https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*)/)
-                if (mp4Match) {
-                    playurl = mp4Match[1]
-                    $print('✓ 从 mp4 提取: ' + playurl)
-                }
+        }
+        
+        // 方法4：查找 .ts 切片链接（可能是 HLS 的一部分）
+        if (!playurl) {
+            const tsMatch = data.match(/(https?:\/\/[^\s"'<>]+\.ts[^\s"'<>]*)/)
+            if (tsMatch) {
+                playurl = tsMatch[1]
+                $print('✓ 从 .ts 切片提取: ' + playurl)
             }
-            
-            // 方法4：查找 iframe 视频源
-            if (!playurl) {
-                const iframeMatch = data.match(/<iframe[^>]+src=["']([^"']+)["']/)
+        }
+        
+        // 方法5：查找 iframe 视频源
+        if (!playurl) {
+            const iframeMatch = data.match(/<iframe[^>]+src=["']([^"']+)["']/))
                 if (iframeMatch) {
                     playurl = iframeMatch[1]
                     if (!playurl.startsWith('http')) {
@@ -416,7 +396,16 @@ async function getPlayinfo(ext) {
                 }
             }
             
-            // 方法7：查找 blob: 或 data: URL 之外的任何视频源
+            // 方法6：查找通用的视频链接
+            if (!playurl) {
+                const videoMatch = data.match(/["'](https?:\/\/[^"']*(?:video|play|stream)[^"']*)["']/)
+                if (videoMatch) {
+                    playurl = videoMatch[1]
+                    $print('✓ 从视频链接提取: ' + playurl)
+                }
+            }
+            
+            // 方法7：查找任何包含媒体扩展名的 src
             if (!playurl) {
                 const srcMatch = data.match(/src=["'](https?:\/\/[^"']+\.(?:m3u8|mp4|flv|ts)[^"']*)["']/)
                 if (srcMatch) {
@@ -426,8 +415,14 @@ async function getPlayinfo(ext) {
             }
         }
         
+        // 如果获取的是相对路径的 /api/ts?url=，确保补全域名
+        if (playurl && playurl.startsWith('/api/')) {
+            playurl = appConfig.site + playurl
+            $print('✓ 补全 API 域名: ' + playurl)
+        }
+        
         if (!playurl) {
-            $print('✗ 未能提取视频URL，请检查网站是否需要特殊处理')
+            $print('✗ 未能提取视频URL，请检查网站是否需要登录或特殊处理')
         }
         
     } catch (error) {
@@ -440,6 +435,7 @@ async function getPlayinfo(ext) {
             {
                 'User-Agent': UA,
                 Referer: appConfig.site,
+                'Authorization': AUTH_TOKEN,
             },
         ],
     })
