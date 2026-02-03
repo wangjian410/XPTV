@@ -4,8 +4,8 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 let appConfig = {
     ver: 1,
-    title: 'IFN',
-    site: 'https://cn.ifn.watch',
+    title: '多乐影院',
+    site: 'https://www.drys.top',
 }
 
 async function getConfig() {
@@ -17,39 +17,69 @@ async function getConfig() {
 async function getTabs() {
     let list = [
         {
+            name: '最近更新',
+            ext: {
+                url: appConfig.site + '/',
+            },
+        },
+        {
             name: '电影',
             ext: {
-                url: appConfig.site + '/category/3',
+                url: appConfig.site + '/movie/movies/',
+            },
+        },
+        {
+            name: '欧美电影',
+            ext: {
+                url: appConfig.site + '/movies/western-movies/',
+            },
+        },
+        {
+            name: '日韩电影',
+            ext: {
+                url: appConfig.site + '/movies/eastasia-movies/',
+            },
+        },
+        {
+            name: '华语电影',
+            ext: {
+                url: appConfig.site + '/movies/chinese-movies/',
             },
         },
         {
             name: '剧集',
             ext: {
-                url: appConfig.site + '/category/4',
+                url: appConfig.site + '/movie/tv-series/',
+            },
+        },
+        {
+            name: '欧美剧',
+            ext: {
+                url: appConfig.site + '/tv-series/western-series/',
+            },
+        },
+        {
+            name: '日韩剧',
+            ext: {
+                url: appConfig.site + '/tv-series/eastasia-series/',
+            },
+        },
+        {
+            name: '华语剧',
+            ext: {
+                url: appConfig.site + '/tv-series/chinese-series/',
+            },
+        },
+        {
+            name: '动画',
+            ext: {
+                url: appConfig.site + '/movie/ainmes/',
             },
         },
         {
             name: '综艺',
             ext: {
-                url: appConfig.site + '/category/5',
-            },
-        },
-        {
-            name: '动漫',
-            ext: {
-                url: appConfig.site + '/category/6',
-            },
-        },
-        {
-            name: '纪录片',
-            ext: {
-                url: appConfig.site + '/category/7',
-            },
-        },
-        {
-            name: '4K',
-            ext: {
-                url: appConfig.site + '/category/40',
+                url: appConfig.site + '/movie/variety-show/',
             },
         },
     ]
@@ -62,8 +92,7 @@ async function getCards(ext) {
     let { page = 1, url } = ext
 
     if (page > 1 && url) {
-        // IFN 的分页可能是 ?page= 或其他格式，需要实际测试
-        url = url + `?page=${page}`
+        url = url + `page/${page}/`
     }
 
     try {
@@ -75,82 +104,60 @@ async function getCards(ext) {
 
         const $ = cheerio.load(data)
 
-        // 方法1：解析标准卡片结构
-        $('a[href^="/detail/"]').each((_, element) => {
-            const linkElem = $(element)
-            const href = linkElem.attr('href')
+        // 解析影片卡片 - 多乐影院结构
+        $('.mi_ne_kd, .video-list-item, article').each((_, element) => {
+            const item = $(element)
             
-            // 获取标题 - 尝试多种方式
-            let title = ''
-            const h3Elem = linkElem.find('h3')
-            if (h3Elem.length > 0) {
-                title = h3Elem.text().trim()
-            }
+            // 获取链接
+            const linkElem = item.find('a').first()
+            let href = linkElem.attr('href')
             
-            // 如果找不到标题，尝试从 img alt 获取
+            // 获取标题
+            let title = item.find('h3, .title, h2').first().text().trim()
             if (!title) {
-                const img = linkElem.find('img')
-                title = img.attr('alt') || img.attr('title') || ''
+                title = linkElem.attr('title') || ''
             }
             
-            // 获取封面图片
+            // 获取封面
             let cover = ''
-            const img = linkElem.find('img')
+            const img = item.find('img').first()
             if (img.length > 0) {
                 cover = img.attr('data-src') || img.attr('src') || ''
-                // 补全域名
-                if (cover && cover.startsWith('/')) {
-                    cover = appConfig.site + cover
-                }
+            }
+            
+            // 获取状态/备注
+            let remarks = ''
+            const statusElem = item.find('.movie-status, .status, .meta').first()
+            if (statusElem.length > 0) {
+                remarks = statusElem.text().trim()
             }
             
             // 获取评分
-            let rating = ''
-            // 尝试从包含数字+分的文本中提取
-            const text = linkElem.text()
-            const ratingMatch = text.match(/(\d+\.?\d*)分/)
-            if (ratingMatch) {
-                rating = ratingMatch[1] + '分'
+            const ratingElem = item.find('.rating, .score')
+            if (ratingElem.length > 0) {
+                const rating = ratingElem.text().trim()
+                if (rating) {
+                    remarks = rating + ' | ' + remarks
+                }
             }
 
             if (href && title) {
-                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                // 确保是相对路径或完整URL
+                if (!href.startsWith('http')) {
+                    href = appConfig.site + href
+                }
+                
                 cards.push({
                     vod_id: href,
                     vod_name: title,
                     vod_pic: cover,
-                    vod_remarks: rating,
+                    vod_remarks: remarks,
                     ext: {
-                        url: fullUrl,
+                        url: href,
                     },
                 })
             }
         })
-
-        // 方法2：如果方法1没找到，尝试从 JSON 数据中提取
-        if (cards.length === 0) {
-            const jsonMatch = data.match(/window\.__INITIAL_STATE__\s*=\s*(\{[^;]+\});/)
-            if (jsonMatch) {
-                try {
-                    const initialState = JSON.parse(jsonMatch[1])
-                    if (initialState.list && initialState.list.length > 0) {
-                        initialState.list.forEach(item => {
-                            cards.push({
-                                vod_id: item.id || item.mediaId,
-                                vod_name: item.title || item.name,
-                                vod_pic: item.coverImgUrl || item.cover,
-                                vod_remarks: item.score || item.updateStatus,
-                                ext: {
-                                    url: appConfig.site + '/detail/' + (item.mediaId || item.id),
-                                },
-                            })
-                        })
-                    }
-                } catch (e) {
-                    $print('解析 INITIAL_STATE 失败: ' + e)
-                }
-            }
-        }
 
         // 去重处理
         const seen = new Set()
@@ -184,90 +191,73 @@ async function getTracks(ext) {
         })
 
         const $ = cheerio.load(data)
+        
         const playGroups = []
         
-        // 方法1：从 detailData JSON 中提取剧集信息
-        const detailDataMatch = data.match(/"detailData":(\{[^}]+\})/)
-        if (detailDataMatch) {
-            try {
-                const detailData = JSON.parse(detailDataMatch[1])
-                if (detailData.episodes && detailData.episodes.length > 0) {
-                    const episodes = []
-                    detailData.episodes.forEach((ep, index) => {
-                        episodes.push({
-                            name: ep.title || `第${index + 1}集`,
-                            pan: '',
-                            ext: {
-                                url: url, // 使用详情页URL，播放时在getPlayinfo中提取
-                                episodeId: ep.id || ep.episodeId,
-                                episodeIndex: index,
-                            },
-                        })
-                    })
-                    
-                    if (episodes.length > 0) {
-                        playGroups.push({
-                            title: '默认线路',
-                            tracks: episodes
-                        })
-                    }
-                }
-            } catch (e) {
-                $print('解析 detailData 失败: ' + e)
-            }
-        }
-        
-        // 方法2：从 JSON-LD 中提取剧集信息
-        if (playGroups.length === 0) {
-            const jsonLdMatch = data.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)
-            if (jsonLdMatch) {
-                try {
-                    const jsonLd = JSON.parse(jsonLdMatch[1])
-                    if (jsonLd.episode && jsonLd.episode.length > 0) {
-                        const episodes = []
-                        jsonLd.episode.forEach((ep, index) => {
-                            episodes.push({
-                                name: ep.name || `第${ep.episodeNumber || index + 1}集`,
-                                pan: '',
-                                ext: {
-                                    url: url,
-                                    episodeIndex: index,
-                                },
-                            })
-                        })
-                        
-                        if (episodes.length > 0) {
-                            playGroups.push({
-                                title: '默认线路',
-                                tracks: episodes
-                            })
-                        }
-                    }
-                } catch (e) {
-                    $print('解析 JSON-LD 失败: ' + e)
-                }
-            }
-        }
-        
-        // 方法3：从页面按钮中提取剧集
-        if (playGroups.length === 0) {
-            const episodes = []
-            let index = 0
+        // 方法1：查找播放线路区块
+        $('.play-list, .episode-list, .video-play-list').each((_, element) => {
+            const section = $(element)
             
-            // 查找所有包含集数文本的按钮
-            $('button').each((_, element) => {
-                const btn = $(element)
-                const title = btn.attr('title')
-                const text = btn.text().trim()
+            // 获取线路名称
+            let lineName = section.prev('h3, h4, .title').text().trim() ||
+                          section.find('.play-title, .list-title').first().text().trim() ||
+                          '默认线路'
+            
+            // 查找剧集链接
+            const episodes = []
+            section.find('a').each((_, e) => {
+                const link = $(e)
+                let name = link.text().trim()
+                let href = link.attr('href')
                 
-                // 匹配集数格式：01, 02, 第1集, 第01集 等
-                if (title && /^\d+$|^第\d+集$/.test(title)) {
+                // 如果链接包含v_play，就是播放链接
+                if (href && href.includes('/v_play/')) {
+                    // 补全URL
+                    if (!href.startsWith('http')) {
+                        href = appConfig.site + href
+                    }
+                    
                     episodes.push({
-                        name: title,
+                        name: name || '播放',
                         pan: '',
                         ext: {
-                            url: url,
-                            episodeIndex: index++,
+                            url: href,
+                        },
+                    })
+                }
+            })
+            
+            if (episodes.length > 0) {
+                playGroups.push({
+                    title: lineName,
+                    tracks: episodes
+                })
+            }
+        })
+        
+        // 方法2：如果没找到，查找所有包含v_play的链接
+        if (playGroups.length === 0) {
+            const episodes = []
+            $('a[href*="/v_play/"]').each((_, e) => {
+                const link = $(e)
+                let name = link.text().trim()
+                let href = link.attr('href')
+                
+                if (!name) {
+                    // 尝试从父元素获取标题
+                    name = link.parent().text().trim()
+                }
+                
+                if (href) {
+                    if (!href.startsWith('http')) {
+                        href = appConfig.site + href
+                    }
+                    
+                    episodes.push({
+                        name: name || '播放',
+                        pan: '',
+                        ext: {
+                            url: href,
                         },
                     })
                 }
@@ -278,6 +268,30 @@ async function getTracks(ext) {
                     title: '默认线路',
                     tracks: episodes
                 })
+            }
+        }
+        
+        // 方法3：查找直接播放按钮
+        if (playGroups.length === 0) {
+            const playBtn = $('a[href*="/v_play/"]').first()
+            if (playBtn.length > 0) {
+                let href = playBtn.attr('href')
+                if (href) {
+                    if (!href.startsWith('http')) {
+                        href = appConfig.site + href
+                    }
+                    
+                    playGroups.push({
+                        title: '默认线路',
+                        tracks: [{
+                            name: '立即播放',
+                            pan: '',
+                            ext: {
+                                url: href,
+                            },
+                        }]
+                    })
+                }
             }
         }
         
@@ -295,134 +309,43 @@ async function getTracks(ext) {
 async function getPlayinfo(ext) {
     ext = argsify(ext)
     const url = ext.url
-    const episodeId = ext.episodeId || ''
-    const episodeIndex = ext.episodeIndex || 0
     let playurl = ''
-    
-    // IFN 登录凭证 - Bearer Token
-    const AUTH_TOKEN = 'Bearer eyJhbGciOiJIUzI1NiIsImtpZCI6Im80NmhCZ3hiSEgyQjZsenQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3J2Y3Jyd2R0Z2d2Ym9tdnp2cGV2LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiI2NTA0MThiZS1iZTc3LTRjYTItOWY3YS0xNWU3Y2YxNzRlNGUiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzcwMTA2NTMzLCJpYXQiOjE3NzAxMDI5MzMsImVtYWlsIjoidC5heS5haC5zLmNody5hcnoyNS43QGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWwiOiJ0LmF5LmFoLnMuY2h3LmFyejI1LjdAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwic3ViIjoiNjUwNDE4YmUtYmU3Ny00Y2EyLTlmN2EtMTVlN2NmMTc0ZTRlIiwidWFfZGF0YTp7ImNmSW5mbyI6eyJhc09yZ2FuaXphdGlvbiI6IktpcmlubyBMTEMiLCJjaXR5IjoiSG9uZyBLb25nIiwiY29sbCI6IkhLRyIsImNvdW50cnkiOiJISyIsInJlZ2lvbiI6IlhYIiwicmVnaW9uQ29kZSI6IlhYIn0sImlzZnJvbSI6InVua25vd24iLCJyZWFsSXAiOiIyMTIuMTA3LjI5LjE5OCIsInJlZmVyIjoiZGlyZWN0IiwicmVmZXJlciI6ImRpcmVjdCIsInVybCI6InVua25vd24iLCJ1c2VyQWdlbnQiOiJNb3ppbGxhLzUuMCAoV2luZG93cyBOVCAxMC4wOyBXaW42NDsgeDY0KSBBcHBsZVdlYktpdC81MzcuMzYgKEtIVE1MLCBsaWtlIEdlY2tvKSBDaHJvbWUvMTM2LjAuMC4wIFNhZmFyaS81MzcuMzYifSwidXNlcm5hbWUiOiJza3RpIn0sInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiYWFsIjoiYWFsMSIsImFtciI6W3sibWV0aG9kIjoib3RwIiwidGltZXN0YW1wIjoxNzcwMTAyOTMzfV0sInNlc3Npb25faWQiOiIxMzIyMDI4Zi0wYzQwLTQ3MzktODczNy04YzJlOGQyNGZjYjgiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.eV94hY2VBkE0l2xPiMe_DdW6xBKBhblRXePx2YCqa8Q'
 
     try {
-        // 首先获取详情页，提取必要的播放信息（带认证）
+        // 获取播放页
         const { data } = await $fetch.get(url, {
             headers: {
                 'User-Agent': UA,
-                'Authorization': AUTH_TOKEN,
             },
+        })
 
-        // 方法1：从 detailData 中提取剧集的 playUrl 或 url
-        const detailDataMatch = data.match(/"detailData":(\{[^}]+\})/)
-        if (detailDataMatch) {
-            try {
-                const detailData = JSON.parse(detailDataMatch[1])
-                if (detailData.episodes && detailData.episodes[episodeIndex]) {
-                    const episode = detailData.episodes[episodeIndex]
-                    // IFN 使用 HLS 流媒体，playUrl 可能是 m3u8 或加密链接
-                    if (episode.playUrl || episode.url || episode.videoUrl) {
-                        playurl = episode.playUrl || episode.url || episode.videoUrl
-                        $print('✓ 从 detailData.episodes 提取: ' + playurl)
-                    }
-                }
-            } catch (e) {
-                $print('解析 detailData 失败: ' + e)
-            }
+        // 方法1：查找 iframe 视频源
+        const iframeMatch = data.match(/<iframe[^>]+src=["']([^"']+)["']/)
+        if (iframeMatch) {
+            playurl = iframeMatch[1]
+            $print('✓ 从 iframe 提取: ' + playurl)
         }
         
-        // 方法2：查找 /api/ts?url= 格式的播放链接
-        if (!playurl) {
-            const tsApiMatch = data.match(/["'](\/api\/ts\?url=[^"']+)["']/)
-            if (tsApiMatch) {
-                playurl = appConfig.site + tsApiMatch[1]
-                $print('✓ 从 /api/ts 提取: ' + playurl)
-            }
+        // 方法2：如果 iframe 是相对路径，补全域名
+        if (playurl && playurl.startsWith('//')) {
+            playurl = 'https:' + playurl
+        } else if (playurl && playurl.startsWith('/')) {
+            playurl = 'https://www.jdys.space' + playurl
         }
         
-        // 方法3：查找 m3u8 播放列表链接
-        if (!playurl) {
-            const m3u8Match = data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
-            if (m3u8Match) {
-                playurl = m3u8Match[1]
-                $print('✓ 从 m3u8 提取: ' + playurl)
+        // 方法3：如果没有找到iframe，尝试构造iframe URL
+        if (!playurl && url.includes('/v_play/')) {
+            // 从v_play链接提取编码ID
+            const idMatch = url.match(/v_play\/([^/]+)/)
+            if (idMatch) {
+                const encodedId = idMatch[1]
+                playurl = `https://www.jdys.space/v_play_iframe/${encodedId}.html`
+                $print('✓ 构造 iframe URL: ' + playurl)
             }
-        }
-        
-        // 方法4：查找 .ts 切片链接（可能是 HLS 的一部分）
-        if (!playurl) {
-            const tsMatch = data.match(/(https?:\/\/[^\s"'<>]+\.ts[^\s"'<>]*)/)
-            if (tsMatch) {
-                playurl = tsMatch[1]
-                $print('✓ 从 .ts 切片提取: ' + playurl)
-            }
-        }
-        
-        // 方法5：查找 iframe 视频源
-        if (!playurl) {
-            const iframeMatch = data.match(/<iframe[^>]+src=["']([^"']+)["']/))
-                if (iframeMatch) {
-                    playurl = iframeMatch[1]
-                    if (!playurl.startsWith('http')) {
-                        playurl = appConfig.site + playurl
-                    }
-                    $print('✓ 从 iframe 提取: ' + playurl)
-                }
-            }
-            
-            // 方法5：查找其他视频链接模式
-            if (!playurl) {
-                const videoMatch = data.match(/["'](https?:\/\/[^"']*(?:video|play|stream)[^"']*)["']/)
-                if (videoMatch) {
-                    playurl = videoMatch[1]
-                    $print('✓ 从视频链接提取: ' + playurl)
-                }
-            }
-            
-            // 方法6：从 detailData 中提取播放地址
-            if (!playurl) {
-                const detailDataMatch = data.match(/"detailData":(\{[^}]+\})/)
-                if (detailDataMatch) {
-                    try {
-                        const detailData = JSON.parse(detailDataMatch[1])
-                        // 如果有 episodes 数组，尝试获取对应集数的播放地址
-                        if (detailData.episodes && detailData.episodes[episodeIndex]) {
-                            const episode = detailData.episodes[episodeIndex]
-                            if (episode.url || episode.playUrl || episode.videoUrl) {
-                                playurl = episode.url || episode.playUrl || episode.videoUrl
-                                $print('✓ 从 detailData.episodes 提取: ' + playurl)
-                            }
-                        }
-                    } catch (e) {
-                        $print('解析 detailData 失败: ' + e)
-                    }
-                }
-            }
-            
-            // 方法6：查找通用的视频链接
-            if (!playurl) {
-                const videoMatch = data.match(/["'](https?:\/\/[^"']*(?:video|play|stream)[^"']*)["']/)
-                if (videoMatch) {
-                    playurl = videoMatch[1]
-                    $print('✓ 从视频链接提取: ' + playurl)
-                }
-            }
-            
-            // 方法7：查找任何包含媒体扩展名的 src
-            if (!playurl) {
-                const srcMatch = data.match(/src=["'](https?:\/\/[^"']+\.(?:m3u8|mp4|flv|ts)[^"']*)["']/)
-                if (srcMatch) {
-                    playurl = srcMatch[1]
-                    $print('✓ 从 src 属性提取: ' + playurl)
-                }
-            }
-        }
-        
-        // 如果获取的是相对路径的 /api/ts?url=，确保补全域名
-        if (playurl && playurl.startsWith('/api/')) {
-            playurl = appConfig.site + playurl
-            $print('✓ 补全 API 域名: ' + playurl)
         }
         
         if (!playurl) {
-            $print('✗ 未能提取视频URL，请检查网站是否需要登录或特殊处理')
+            $print('✗ 未能提取视频URL')
         }
         
     } catch (error) {
@@ -435,7 +358,6 @@ async function getPlayinfo(ext) {
             {
                 'User-Agent': UA,
                 Referer: appConfig.site,
-                'Authorization': AUTH_TOKEN,
             },
         ],
     })
@@ -446,8 +368,9 @@ async function search(ext) {
     let cards = []
     let text = encodeURIComponent(ext.text)
     let page = ext.page || 1
-    let url = `${appConfig.site}/search?keyword=${text}`
-
+    
+    // 多乐影院搜索URL格式
+    let url = `${appConfig.site}/search?s=${text}`
     if (page > 1) {
         url += `&page=${page}`
     }
@@ -462,45 +385,41 @@ async function search(ext) {
         const $ = cheerio.load(data)
 
         // 使用与 getCards 相同的解析逻辑
-        $('a[href^="/detail/"]').each((_, element) => {
-            const linkElem = $(element)
-            const href = linkElem.attr('href')
+        $('.mi_ne_kd, .video-list-item, article, .search-item').each((_, element) => {
+            const item = $(element)
             
-            let title = linkElem.find('h3, .title, [class*="title"]').text().trim()
+            const linkElem = item.find('a').first()
+            let href = linkElem.attr('href')
+            
+            let title = item.find('h3, .title, h2').first().text().trim()
             if (!title) {
-                const img = linkElem.find('img')
-                title = img.attr('alt') || ''
+                title = linkElem.attr('title') || ''
             }
             
             let cover = ''
-            const img = linkElem.find('img')
+            const img = item.find('img').first()
             if (img.length > 0) {
                 cover = img.attr('data-src') || img.attr('src') || ''
-                if (cover && cover.startsWith('/api/image/')) {
-                    cover = appConfig.site + cover
-                }
             }
             
-            const ratingElem = linkElem.find('.rating, [class*="score"], [class*="rating"]')
-            let rating = ratingElem.text().trim()
-            
-            if (!rating) {
-                const text = linkElem.text()
-                const ratingMatch = text.match(/(\d+\.?\d*)分/)
-                if (ratingMatch) {
-                    rating = ratingMatch[1] + '分'
-                }
+            let remarks = ''
+            const statusElem = item.find('.movie-status, .status, .meta').first()
+            if (statusElem.length > 0) {
+                remarks = statusElem.text().trim()
             }
 
             if (href && title) {
-                const fullUrl = href.startsWith('http') ? href : appConfig.site + href
+                if (!href.startsWith('http')) {
+                    href = appConfig.site + href
+                }
+                
                 cards.push({
                     vod_id: href,
                     vod_name: title,
                     vod_pic: cover,
-                    vod_remarks: rating,
+                    vod_remarks: remarks,
                     ext: {
-                        url: fullUrl,
+                        url: href,
                     },
                 })
             }
