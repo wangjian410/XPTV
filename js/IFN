@@ -109,17 +109,22 @@ async function getCards(ext) {
         $('.mi_ne_kd li, .video-list-item, article').each((_, element) => {
             const item = $(element)
             
-            // 获取播放链接（第一个a标签，通常是/v_play/xxx.html）
+            // 获取播放链接（通常是/v_play/xxx.html）
             const playLink = item.find('a[href*="/v_play/"]').first()
             let playUrl = playLink.attr('href')
             
-            // 获取详情页链接（用于获取更多信息）
-            const detailLink = item.find('h3.dytit a').first()
+            // 获取详情页链接 - 排除分类链接，找movie/xxx.html格式的
+            let detailLink = item.find('h3.dytit a[href*="/movie/"]').first()
+            if (!detailLink.length) {
+                // 如果没找到，尝试找最后一个a（影片名通常在最后）
+                detailLink = item.find('h3.dytit a').last()
+            }
             let detailUrl = detailLink.attr('href')
             
-            // 获取标题 - 优先从h3.dytit里的a获取，其次从img alt获取
+            // 获取标题 - 优先从h3.dytit里的movie链接获取，其次从img alt获取
             let title = detailLink.text().trim()
-            if (!title) {
+            // 过滤掉分类名称（通常很短或者是"欧美电影"这种）
+            if (!title || title.length < 3 || title.includes('电影') || title.includes('剧')) {
                 const img = item.find('img.thumb, img').first()
                 title = img.attr('alt') || ''
             }
@@ -203,36 +208,48 @@ async function getTracks(ext) {
         
         const playGroups = []
         
-        // 方法1：如果是详情页（/movie/xxx.html），查找播放列表
-        if (url.includes('/movie/')) {
-            // 查找所有播放链接
-            const episodes = []
+        // 方法1：查找所有/v_play/链接
+        const episodes = []
+        
+        // 在页面中查找所有播放链接
+        $('a[href*="/v_play/"]').each((_, e) => {
+            const link = $(e)
+            let href = link.attr('href')
+            let name = link.text().trim()
             
-            // 查找剧集列表（如果有的话）
-            $('a[href*="/v_play/"]').each((_, e) => {
-                const link = $(e)
-                let href = link.attr('href')
-                let name = link.text().trim()
-                
-                // 如果name为空，尝试从上下文获取
-                if (!name) {
-                    name = link.closest('li').find('.title, .num').text().trim()
+            // 清理name，去掉多余空格
+            name = name.replace(/\s+/g, ' ').trim()
+            
+            // 如果name为空或包含"立即播放"，尝试从上下文获取更好的名称
+            if (!name || name.includes('立即播放') || name.length < 2) {
+                // 尝试从父元素获取
+                const parentText = link.parent().text().trim()
+                if (parentText && parentText.length > name.length) {
+                    name = parentText
                 }
-                if (!name) {
-                    // 从链接中提取集数信息
-                    const match = href.match(/nm_(\d+)/)
-                    if (match) {
-                        name = '第' + match[1] + '集'
-                    } else {
-                        name = '播放'
-                    }
+            }
+            
+            // 如果还是没有名字，尝试从href提取集数
+            if (!name || name.length < 2) {
+                const match = href.match(/nm_(\d+)/)
+                if (match) {
+                    name = '第' + match[1] + '集'
+                } else {
+                    name = '立即播放'
+                }
+            }
+            
+            if (href) {
+                // 确保URL完整
+                if (href.startsWith('//')) {
+                    href = 'https:' + href
+                } else if (!href.startsWith('http')) {
+                    href = appConfig.site + href
                 }
                 
-                if (href) {
-                    if (!href.startsWith('http')) {
-                        href = appConfig.site + href
-                    }
-                    
+                // 避免重复
+                const exists = episodes.find(ep => ep.ext.url === href)
+                if (!exists) {
                     episodes.push({
                         name: name,
                         pan: '',
@@ -241,14 +258,14 @@ async function getTracks(ext) {
                         },
                     })
                 }
-            })
-            
-            if (episodes.length > 0) {
-                playGroups.push({
-                    title: '默认线路',
-                    tracks: episodes
-                })
             }
+        })
+        
+        if (episodes.length > 0) {
+            playGroups.push({
+                title: '默认线路',
+                tracks: episodes
+            })
         }
         
         // 方法2：如果直接从播放页进入（/v_play/），直接返回当前播放
@@ -263,30 +280,6 @@ async function getTracks(ext) {
                     },
                 }]
             })
-        }
-        
-        // 方法3：如果没找到任何播放链接，尝试查找主页面的播放按钮
-        if (playGroups.length === 0) {
-            const playBtn = $('a[href*="/v_play/"]').first()
-            if (playBtn.length > 0) {
-                let href = playBtn.attr('href')
-                if (href) {
-                    if (!href.startsWith('http')) {
-                        href = appConfig.site + href
-                    }
-                    
-                    playGroups.push({
-                        title: '默认线路',
-                        tracks: [{
-                            name: '立即播放',
-                            pan: '',
-                            ext: {
-                                url: href,
-                            },
-                        }]
-                    })
-                }
-            }
         }
         
         tracks = playGroups
@@ -382,17 +375,21 @@ async function search(ext) {
         $('.mi_ne_kd li, .video-list-item, article, .search-item').each((_, element) => {
             const item = $(element)
             
-            // 获取播放链接（第一个a标签，通常是/v_play/xxx.html）
+            // 获取播放链接（通常是/v_play/xxx.html）
             const playLink = item.find('a[href*="/v_play/"]').first()
             let playUrl = playLink.attr('href')
             
-            // 获取详情页链接
-            const detailLink = item.find('h3.dytit a').first()
+            // 获取详情页链接 - 排除分类链接，找movie/xxx.html格式的
+            let detailLink = item.find('h3.dytit a[href*="/movie/"]').first()
+            if (!detailLink.length) {
+                detailLink = item.find('h3.dytit a').last()
+            }
             let detailUrl = detailLink.attr('href')
             
-            // 获取标题 - 优先从h3.dytit里的a获取，其次从img alt获取
+            // 获取标题 - 优先从h3.dytit里的movie链接获取，其次从img alt获取
             let title = detailLink.text().trim()
-            if (!title) {
+            // 过滤掉分类名称
+            if (!title || title.length < 3 || title.includes('电影') || title.includes('剧')) {
                 const img = item.find('img.thumb, img').first()
                 title = img.attr('alt') || ''
             }
