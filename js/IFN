@@ -29,45 +29,9 @@ async function getTabs() {
             },
         },
         {
-            name: '欧美电影',
-            ext: {
-                url: appConfig.site + '/movies/western-movies/',
-            },
-        },
-        {
-            name: '日韩电影',
-            ext: {
-                url: appConfig.site + '/movies/eastasia-movies/',
-            },
-        },
-        {
-            name: '华语电影',
-            ext: {
-                url: appConfig.site + '/movies/chinese-movies/',
-            },
-        },
-        {
             name: '剧集',
             ext: {
                 url: appConfig.site + '/movie/tv-series/',
-            },
-        },
-        {
-            name: '欧美剧',
-            ext: {
-                url: appConfig.site + '/tv-series/western-series/',
-            },
-        },
-        {
-            name: '日韩剧',
-            ext: {
-                url: appConfig.site + '/tv-series/eastasia-series/',
-            },
-        },
-        {
-            name: '华语剧',
-            ext: {
-                url: appConfig.site + '/tv-series/chinese-series/',
             },
         },
         {
@@ -293,6 +257,29 @@ async function getTracks(ext) {
     })
 }
 
+// AES解密函数
+function aesDecrypt(encryptedData, key, iv) {
+    try {
+        // 使用简单的AES解密实现
+        // 注意：XPTV环境可能不支持完整的CryptoJS，这里使用简化版
+        
+        // 首先尝试用atob解码base64
+        let decoded = ''
+        try {
+            decoded = atob(encryptedData)
+        } catch(e) {
+            // 如果atob失败，返回空
+            return ''
+        }
+        
+        // 由于XPTV不支持完整加密库，这里返回空，让后续逻辑处理
+        return ''
+    } catch (error) {
+        $print('AES解密失败: ' + error)
+        return ''
+    }
+}
+
 async function getPlayinfo(ext) {
     ext = argsify(ext)
     const url = ext.url
@@ -303,6 +290,7 @@ async function getPlayinfo(ext) {
         const { data } = await $fetch.get(url, {
             headers: {
                 'User-Agent': UA,
+                'Referer': appConfig.site,
             },
         })
 
@@ -322,13 +310,72 @@ async function getPlayinfo(ext) {
         
         // 方法3：如果没有找到iframe，尝试构造iframe URL
         if (!playurl && url.includes('/v_play/')) {
-            // 从v_play链接提取编码ID
             const idMatch = url.match(/v_play\/([^/]+)/)
             if (idMatch) {
                 const encodedId = idMatch[1]
                 playurl = `https://www.jdys.space/v_play_iframe/${encodedId}.html`
                 $print('✓ 构造 iframe URL: ' + playurl)
             }
+        }
+        
+        // 方法4：尝试访问iframe页面并提取解密后的视频URL
+        if (playurl && playurl.includes('jdys.space')) {
+            try {
+                const iframeData = await $fetch.get(playurl, {
+                    headers: {
+                        'User-Agent': UA,
+                        'Referer': appConfig.site,
+                    },
+                })
+                
+                // 尝试从iframe页面提取加密数据
+                const encryptedMatch = iframeData.data.match(/var\s+d2d4be\s*=\s*["']([^"']+)["']/)
+                if (encryptedMatch) {
+                    $print('✓ 找到加密数据')
+                    // 尝试提取eval后的配置
+                    // 由于AES解密复杂，尝试直接匹配解密后的视频URL
+                }
+                
+                // 尝试匹配DPlayer配置中的视频URL
+                const dplayerMatch = iframeData.data.match(/video:\s*\{[^}]*url:\s*["']([^"']+)["']/)
+                if (dplayerMatch) {
+                    const videoUrl = dplayerMatch[1]
+                    $print('✓ 从 DPlayer 配置提取: ' + videoUrl)
+                    playurl = videoUrl
+                }
+                
+                // 尝试匹配m3u8或mp4直链
+                if (!playurl || playurl.includes('jdys.space')) {
+                    const m3u8Match = iframeData.data.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/)
+                    const mp4Match = iframeData.data.match(/(https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*)/)
+                    
+                    if (m3u8Match) {
+                        playurl = m3u8Match[1]
+                        $print('✓ 从 iframe 提取 m3u8: ' + playurl)
+                    } else if (mp4Match) {
+                        playurl = mp4Match[1]
+                        $print('✓ 从 iframe 提取 mp4: ' + playurl)
+                    }
+                }
+                
+                // 尝试匹配云存储链接
+                if (!playurl || playurl.includes('jdys.space')) {
+                    const cloudMatch = iframeData.data.match(/(https?:\/\/[^\s"'<>]*(?:cloud|oss|cdn|storage)[^\s"'<>]*\.(?:m3u8|mp4|ts)[^\s"'<>]*)/)
+                    if (cloudMatch) {
+                        playurl = cloudMatch[1]
+                        $print('✓ 从 iframe 提取云存储链接: ' + playurl)
+                    }
+                }
+                
+            } catch (e) {
+                $print('访问iframe页面失败: ' + e)
+            }
+        }
+        
+        // 方法5：如果还是jdys.space的iframe，说明无法解密，返回空
+        if (playurl && playurl.includes('jdys.space') && playurl.includes('v_play_iframe')) {
+            $print('✗ 无法提取解密后的视频URL，可能需要在浏览器环境中播放')
+            playurl = ''
         }
         
         if (!playurl) {
